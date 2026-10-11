@@ -9,8 +9,9 @@ Run from the repository root. Each script runs on CPU and shows a complete backw
 | [classification.py](classification.py) | VFL and QFL with caller-supplied quality targets | `uv run examples/classification.py` |
 | [custom_loss.py](custom_loss.py) | A custom pure function combined with ProbIoU through the builder | `uv run examples/custom_loss.py` |
 | [detr.py](detr.py) | Per-layer set criterion, separate matcher/loss weights, L1, ProbIoU, and VFL | `uv run examples/detr.py` |
+| [custom_set_loss.py](custom_set_loss.py) | Named weighted callbacks and a direction constraint on matched/unmatched queries | `uv run examples/custom_set_loss.py` |
 
-`just examples` runs all four scripts. They use fixed inputs and typed error handling.
+`just examples` runs all five scripts. They use fixed inputs and typed error handling.
 
 For DETR integration, adapt each layer's model output to `DecoderOutput`, pack your
 annotations with `obb.pack_targets`, and call `layer_loss(output, targets, criterion)`.
@@ -23,7 +24,7 @@ with the target boxes. For angle-based output, use `obb.boxes_from_angles` first
 The criterion rematches each layer using classification, L1, and ProbIoU costs with
 independent matching weights. VFL uses caller-supplied per-target quality (0.8 in
 this example); unmatched query/classes have zero quality. Training uses separate
-loss weights and returns per-sample values with `Reduction.NONE` and
+weighted callbacks and returns per-sample values with `Reduction.NONE` and
 `TargetCount.PER_SAMPLE`. The caller averages those values, weights auxiliary layers
 by 0.5, and sums the layer losses. Empty target samples still train negative classification.
 For distributed training, compute the appropriate target-count normalizer in your

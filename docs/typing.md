@@ -39,7 +39,7 @@ widths, aligned row counts, module arguments, and callback signatures.
 
 The upstream stubs are experimental. With strict callable subtyping, their base
 `Module.forward(*args, **kwargs)` declaration conflicts with ordinary narrowed
-subclass signatures. Nine local `bad-override` directives cover that specific base
+subclass signatures. Local `bad-override` directives cover that specific base
 signature mismatch; argument, return, and callback protocol checks remain enabled.
 Dtype constants are currently typed as `Any` upstream; the precision-selection
 adapter casts only those known Torch constants to `torch.dtype`. Tests use the
@@ -50,3 +50,9 @@ Python 3.12 generic declaration syntax cannot appear in executable library files
 while supporting 3.11. Newer syntax in external stub files is parsed by Pyrefly,
 not imported by the runtime. Do not evaluate native annotations at runtime without
 an explicitly supported annotation-resolution boundary.
+
+Set composition uses `LossFunction[SetLossContext]` for raw sample vectors and
+`LossFunction[SetCostContext]` for bounded candidate vectors. Both return typed
+`Result[Tensor[[int]], InputError]`. Static tests reject unchecked Tensor returns and
+mixing a cost context into a sample-loss selection. Runtime checks establish vector
+counts, floating dtype, device, finiteness, and valid record contents.

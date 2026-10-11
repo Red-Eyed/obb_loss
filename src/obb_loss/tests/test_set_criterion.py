@@ -1,6 +1,7 @@
 """Per-layer set matching, normalization, component weights, and gradient contracts."""
 
 import math
+from functools import partial
 from itertools import permutations
 
 import pytest
@@ -10,8 +11,46 @@ import torch.testing
 from torch import Tensor
 
 import obb_loss as obb
-import obb_loss.set_criterion as criterion_module
-import obb_loss.set_matching as matching_module
+
+_DEFAULT_PARAMETERS = obb.VFLParameters()
+
+
+def _costs(
+    classification: float = 1, l1: float = 5, probiou: float = 2
+) -> dict[str, obb.LossFunction[obb.SetCostContext]]:
+    """Configure independent callback multipliers for assignment test oracles."""
+    return {
+        "classification": obb.WeightedLoss(
+            obb.set_classification_cost, obb.WeightConfig(weight=classification)
+        ),
+        "l1": obb.WeightedLoss(obb.set_l1_cost, obb.WeightConfig(weight=l1)),
+        "probiou": obb.WeightedLoss(
+            obb.set_probiou_cost, obb.WeightConfig(weight=probiou)
+        ),
+    }
+
+
+def _losses(
+    classification: float = 1,
+    l1: float = 5,
+    probiou: float = 2,
+    formulation: obb.VFLParameters | obb.QFLParameters = _DEFAULT_PARAMETERS,
+) -> dict[str, obb.LossFunction[obb.SetLossContext]]:
+    """Configure independent weighted sample callbacks for training test oracles."""
+    match formulation:
+        case obb.VFLParameters():
+            callback = partial(obb.set_varifocal_loss, config=formulation)
+        case obb.QFLParameters():
+            callback = partial(obb.set_quality_focal_loss, config=formulation)
+    return {
+        "classification": obb.WeightedLoss(
+            callback, obb.WeightConfig(weight=classification)
+        ),
+        "l1": obb.WeightedLoss(obb.set_l1_loss, obb.WeightConfig(weight=l1)),
+        "probiou": obb.WeightedLoss(
+            obb.set_probiou_loss, obb.WeightConfig(weight=probiou)
+        ),
+    }
 
 
 @pytest.fixture
@@ -82,11 +121,9 @@ def test_weighted_cost_and_assignment(
 ) -> None:
     """Match the independent analytic weighted cost and choose its minimum."""
     preds, targets = sets
-    config = obb.SetMatcherConfig(
-        weights=obb.SetWeights(classification=10.0, l1=2.0, probiou=0.0),
-        storage=obb.MatcherConfig(chunk_size=1),
-    )
-    costs = obb.set_pairwise_costs(preds, targets, config)
+    config = obb.MatcherConfig(chunk_size=1)
+    costs_callbacks = _costs(classification=10, l1=2, probiou=0)
+    costs = obb.set_pairwise_costs(preds, targets, config, costs=costs_callbacks)
     assert isinstance(costs, obb.Ok)
     expected = torch.tensor(
         [-10 / (1 + math.exp(4)) + 0.4, -10 / (1 + math.exp(-4)) + 1.6],
@@ -94,7 +131,9 @@ def test_weighted_cost_and_assignment(
         dtype=torch.float64,
     )
     torch.testing.assert_close(costs.value.values, expected)
-    assignment = obb.SetHungarianMatcher(config).forward(preds, targets)
+    assignment = obb.SetHungarianMatcher(config, costs=costs_callbacks).forward(
+        preds, targets
+    )
     assert isinstance(assignment, obb.Ok)
     assert assignment.value.pred_indices.tolist() == [1]
     assert not assignment.value.pred_indices.requires_grad
@@ -107,24 +146,25 @@ def test_component_losses_and_backward(
 ) -> None:
     """The weighted total matches plain losses and preserves caller quality gradients."""
     preds, targets = sets
-    config = obb.SetCriterionConfig(
-        weights=obb.SetWeights(classification=3.0, l1=4.0, probiou=2.0),
-        matcher=obb.SetMatcherConfig(
-            weights=obb.SetWeights(classification=0.0, l1=1.0, probiou=0.0)
+    criterion = obb.SetCriterion(
+        matcher=obb.SetHungarianMatcher(
+            costs=_costs(classification=0, l1=1, probiou=0)
         ),
-        classification=classification,
+        losses=_losses(classification=3, l1=4, probiou=2, formulation=classification),
     )
-    result = obb.SetCriterion(config).forward(preds, targets, normalizer=2.0)
+    result = criterion(preds, targets, normalizer=2.0)
     assert isinstance(result, obb.Ok)
     losses = result.value
     torch.testing.assert_close(
-        losses.l1, torch.tensor(0.1, device=preds.logits.device, dtype=torch.float64)
+        losses.terms["l1"],
+        torch.tensor(0.4, device=preds.logits.device, dtype=torch.float64),
     )
     first, second = obb.gather_matched(
         preds.geometry, targets.geometry, losses.assignment
     )
     torch.testing.assert_close(
-        losses.probiou, obb.stable_probiou_loss(first.boxes, second.boxes).sum() / 2
+        losses.terms["probiou"],
+        obb.stable_probiou_loss(first.boxes, second.boxes).sum(),
     )
     quality = torch.zeros_like(preds.logits)
     quality[0, 1] = 0.7
@@ -133,9 +173,9 @@ def test_component_losses_and_backward(
             expected = obb.varifocal_loss(preds.logits, quality).sum() / 2
         case obb.QFLConfig():
             expected = obb.quality_focal_loss(preds.logits, quality).sum() / 2
-    torch.testing.assert_close(losses.classification, expected)
+    torch.testing.assert_close(losses.terms["classification"], 3 * expected)
     torch.testing.assert_close(
-        losses.total, 3 * expected + 4 * losses.l1 + 2 * losses.probiou
+        losses.total, 3 * expected + losses.terms["l1"] + losses.terms["probiou"]
     )
     losses.total.backward()
     assert preds.geometry.boxes.grad is not None
@@ -149,27 +189,20 @@ def test_component_losses_and_backward(
 def test_loss_weights_do_not_change_matching(
     sets: tuple[obb.PackedPredictions, obb.PackedTargets],
 ) -> None:
-    """Loss weights change totals while matching weights independently change assignments."""
+    """Training callbacks change totals while cost callbacks independently change assignment."""
     preds, targets = sets
-    geometrical = obb.SetMatcherConfig(
-        weights=obb.SetWeights(classification=0.0, l1=1.0, probiou=0.0)
+    geometrical = obb.SetHungarianMatcher(
+        costs=_costs(classification=0, l1=1, probiou=0)
     )
-    first = obb.SetCriterion(obb.SetCriterionConfig(matcher=geometrical)).forward(
-        preds, targets
-    )
+    first = obb.SetCriterion(matcher=geometrical)(preds, targets)
     second = obb.SetCriterion(
-        obb.SetCriterionConfig(
-            matcher=geometrical,
-            weights=obb.SetWeights(classification=9, l1=0, probiou=0),
-        )
-    ).forward(preds, targets)
+        matcher=geometrical, losses=_losses(classification=9, l1=0, probiou=0)
+    )(preds, targets)
     third = obb.SetCriterion(
-        obb.SetCriterionConfig(
-            matcher=obb.SetMatcherConfig(
-                weights=obb.SetWeights(classification=10, l1=1, probiou=0)
-            )
+        matcher=obb.SetHungarianMatcher(
+            costs=_costs(classification=10, l1=1, probiou=0)
         )
-    ).forward(preds, targets)
+    )(preds, targets)
     assert isinstance(first, obb.Ok)
     assert isinstance(second, obb.Ok)
     assert isinstance(third, obb.Ok)
@@ -184,28 +217,22 @@ def test_loss_weights_do_not_change_matching(
 
 def test_disabled_terms_skip_functions(
     sets: tuple[obb.PackedPredictions, obb.PackedTargets],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Disabled matching and loss terms never evaluate their functions."""
+    """Zero-weight callbacks are omitted and never run; empty losses retain gradients."""
 
-    def forbidden(first: Tensor, second: Tensor) -> Tensor:
-        """Fail if an omitted numerical term runs."""
+    def forbidden(context: obb.SetLossContext) -> obb.Result[Tensor, obb.InputError]:
+        """Fail if a disabled sample callback is evaluated."""
         pytest.fail("disabled term evaluated")
 
-    for module in (criterion_module, matching_module):
-        monkeypatch.setattr(module, "box_l1_loss", forbidden)
-        monkeypatch.setattr(module, "stable_probiou_loss", forbidden)
-    monkeypatch.setattr(criterion_module, "_classification_loss", forbidden)
-    config = obb.SetCriterionConfig(
-        weights=obb.SetWeights(classification=0, l1=0, probiou=0),
-        matcher=obb.SetMatcherConfig(
-            weights=obb.SetWeights(classification=1, l1=0, probiou=0)
-        ),
+    criterion = obb.SetCriterion(
+        matcher=obb.SetHungarianMatcher(costs={"class": obb.set_classification_cost}),
+        losses={"disabled": obb.WeightedLoss(forbidden, obb.WeightConfig(weight=0))},
     )
     preds, targets = sets
-    result = obb.SetCriterion(config).forward(preds, targets)
+    result = criterion(preds, targets)
     assert isinstance(result, obb.Ok)
     assert result.value.total.item() == 0
+    assert not result.value.terms
     result.value.total.backward()
     assert preds.logits.grad is not None
     assert bool((preds.logits.grad == 0).all())
@@ -220,24 +247,13 @@ def test_reject_normalizer(
 
 
 def test_set_config_validation() -> None:
-    """Configs reject ambiguous double weighting and all-disabled matching costs."""
-    assert isinstance(
-        obb.parse_config(
-            obb.SetMatcherConfig,
-            {"weights": {"classification": 0, "l1": 0, "probiou": 0}},
-        ),
-        obb.Err,
-    )
-    assert isinstance(
-        obb.parse_config(
-            obb.SetCriterionConfig, {"classification": {"kind": "vfl", "weight": 2}}
-        ),
-        obb.Err,
-    )
-    config = obb.SetCriterionConfig(classification=obb.QFLConfig())
-    assert (
-        obb.SetCriterionConfig.model_validate_json(config.model_dump_json()) == config
-    )
+    """Weight configs reject negative/nonfinite multipliers and serialize math separately."""
+    for weight in (-1.0, math.nan, math.inf):
+        assert isinstance(
+            obb.parse_config(obb.WeightConfig, {"weight": weight}), obb.Err
+        )
+    config = obb.QFLParameters(beta=1.5)
+    assert obb.QFLParameters.model_validate_json(config.model_dump_json()) == config
 
 
 def test_empty_samples_and_isolation(device: torch.device) -> None:
@@ -264,8 +280,8 @@ def test_empty_samples_and_isolation(device: torch.device) -> None:
     result = obb.SetCriterion().forward(preds.value, targets.value)
     assert isinstance(result, obb.Ok)
     assert result.value.assignment.cu_seqlens.tolist() == [0, 0, 0]
-    assert result.value.l1.item() == result.value.probiou.item() == 0
-    assert result.value.classification.item() > 0
+    assert result.value.terms["l1"].item() == result.value.terms["probiou"].item() == 0
+    assert result.value.terms["classification"].item() > 0
     result.value.total.backward()
     assert boxes.grad is not None
     assert bool((boxes.grad == 0).all())
@@ -299,7 +315,7 @@ def test_revalidate_fields_and_storage(
     assert isinstance(obb.SetCriterion().forward(preds, invalid), obb.Err)
     invalid = obb.PackedTargets(targets.geometry, targets.labels, targets.quality + 1)
     assert isinstance(obb.SetCriterion().forward(preds, invalid), obb.Err)
-    config = obb.SetMatcherConfig(storage=obb.MatcherConfig(max_pairs=1))
+    config = obb.MatcherConfig(max_pairs=1)
     assert isinstance(obb.SetHungarianMatcher(config).forward(preds, targets), obb.Err)
     bad = obb.PackedPredictions(preds.geometry, preds.logits[:1])
     assert isinstance(obb.SetCriterion().forward(bad, targets), obb.Err)
@@ -316,10 +332,8 @@ def test_revalidate_fields_and_storage(
 def test_seeded_assignment_reference(device: torch.device) -> None:
     """Seeded rectangular costs agree with a scalar oracle and brute-force assignments."""
     generator = torch.Generator(device=device).manual_seed(901)
-    config = obb.SetMatcherConfig(
-        weights=obb.SetWeights(classification=2.0, l1=3.0, probiou=0.0),
-        storage=obb.MatcherConfig(chunk_size=2),
-    )
+    config = obb.MatcherConfig(chunk_size=2)
+    costs_callbacks = _costs(classification=2, l1=3, probiou=0)
     for _ in range(16):
         first = torch.rand(
             3, 6, generator=generator, device=device, dtype=torch.float64
@@ -357,10 +371,12 @@ def test_seeded_assignment_reference(device: torch.device) -> None:
             device=device,
             dtype=torch.float64,
         )
-        costs = obb.set_pairwise_costs(preds, targets, config)
+        costs = obb.set_pairwise_costs(preds, targets, config, costs=costs_callbacks)
         assert isinstance(costs, obb.Ok)
         torch.testing.assert_close(costs.value.values, reference)
-        result = obb.SetHungarianMatcher(config).forward(preds, targets)
+        result = obb.SetHungarianMatcher(config, costs=costs_callbacks).forward(
+            preds, targets
+        )
         assert isinstance(result, obb.Ok)
         expected = min(
             sum(reference[rows[column] * 2 + column].item() for column in range(2))
@@ -378,7 +394,9 @@ def test_seeded_assignment_reference(device: torch.device) -> None:
         changed_quality = obb.PackedTargets(
             targets.geometry, targets.labels, 1 - targets.quality
         )
-        unchanged = obb.set_pairwise_costs(preds, changed_quality, config)
+        unchanged = obb.set_pairwise_costs(
+            preds, changed_quality, config, costs=costs_callbacks
+        )
         assert isinstance(unchanged, obb.Ok)
         torch.testing.assert_close(unchanged.value.values, costs.value.values)
 

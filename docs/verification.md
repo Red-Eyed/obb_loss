@@ -1,10 +1,10 @@
 # Verification evidence
 
 Local checks use Python 3.11.15 and 3.12.13, PyTorch 2.14.1, and macOS arm64 CPU.
-Both interpreter suites passed 89 tests; 64 CUDA cases skipped on each interpreter.
+Both interpreter suites passed 100 tests; 74 CUDA cases skipped on each interpreter.
 CUDA remains unverified locally. The portable `py3-none-any` wheel supports Python
-3.11+, and runnable examples cover public forward/backward APIs. The 0.8.0 wheel
-passed forward/backward in an isolated Python 3.11 environment containing neither
+3.11+, and runnable examples cover public forward/backward APIs. The 0.9.0 wheel
+passed custom set-callback forward/backward in an isolated Python 3.11 environment containing neither
 jaxtyping nor shape_extensions.
 CI is configured to test Python 3.11–3.14 on Linux; its execution is
 unverified until the repository workflow runs. AOT eager fullgraph compilation was checked
@@ -33,6 +33,10 @@ applies to the plain ProbIoU criterion, not this orchestration API.
 Per-sample reduction tests compare sample vectors to independent calls, verify
 explicit per-sample/batch normalization and SUM/MEAN equivalence, preserve zero-query
 segments, and isolate gradients when selecting one sample's loss.
+Callback composition tests verify custom regularizers on unmatched queries, registered
+module parameters/buffers and hooks, disabled-term omission, custom bounded matching
+costs, weighted named reports, typed failures, and malformed output rejection. Static
+negative fixtures reject incorrect callback contexts and plain-Tensor return contracts.
 
 ## Seeded CPU stress study
 

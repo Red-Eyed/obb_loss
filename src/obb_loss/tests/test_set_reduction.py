@@ -59,7 +59,10 @@ def test_reductions_match_sample_vector(
     assert isinstance(summed, obb.Ok)
     assert isinstance(mean, obb.Ok)
     for vector, total, average in zip(
-        none.value[:4], summed.value[:4], mean.value[:4], strict=True
+        (*none.value.terms.values(), none.value.total),
+        (*summed.value.terms.values(), summed.value.total),
+        (*mean.value.terms.values(), mean.value.total),
+        strict=True,
     ):
         assert vector.shape == (3,)
         torch.testing.assert_close(total, vector.sum())
@@ -75,11 +78,11 @@ def test_reductions_match_sample_vector(
         case float():
             expected = [0.05, 0.3, 0.0]
     torch.testing.assert_close(
-        none.value.l1,
-        torch.tensor(expected, device=batch[0].logits.device, dtype=torch.float64),
+        none.value.terms["l1"],
+        5 * torch.tensor(expected, device=batch[0].logits.device, dtype=torch.float64),
     )
-    assert none.value.classification[-1].item() > 0
-    assert none.value.probiou[-1].item() == 0
+    assert none.value.terms["classification"][-1].item() > 0
+    assert none.value.terms["probiou"][-1].item() == 0
 
 
 def test_sample_losses_match_independent_calls(
@@ -120,7 +123,11 @@ def test_sample_losses_match_independent_calls(
             normalizer=obb.TargetCount.PER_SAMPLE,
         )
         assert isinstance(alone, obb.Ok)
-        for vector, scalar in zip(together.value[:4], alone.value[:4], strict=True):
+        for vector, scalar in zip(
+            (*together.value.terms.values(), together.value.total),
+            (*alone.value.terms.values(), alone.value.total),
+            strict=True,
+        ):
             torch.testing.assert_close(vector[sample], scalar)
 
 

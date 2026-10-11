@@ -1,8 +1,7 @@
-"""Per-sample assignment costs for class logits, box L1, and ProbIoU.
+"""Per-sample Hungarian assignment from composed bounded-pair callbacks.
 
-DETR cost weighting: Carion et al., ECCV 2020, https://arxiv.org/abs/2005.12872.
-This oriented sigmoid-class variant uses negative target-class probability,
-center/side L1, and ProbIoU loss instead of softmax probability and GIoU.
+Set assignment: Carion et al., ECCV 2020, https://arxiv.org/abs/2005.12872.
+The default callbacks use sigmoid target-class probability, L1, and ProbIoU.
 """
 
 from __future__ import annotations
@@ -13,52 +12,23 @@ import torch
 from torch import Tensor, nn
 from typing_extensions import override
 
-from obb_loss.config import SetMatcherConfig
-from obb_loss.losses.l1 import box_l1_loss
-from obb_loss.losses.stable_probiou import stable_probiou_loss, validate_pairs
+from obb_loss.composition import DefaultComposition, LossComposition, LossFunction
+from obb_loss.config import MatcherConfig
+from obb_loss.packed import ErrorKind, InputError
 from obb_loss.pairwise import PackedCosts, cost_blocks, validate_output
 from obb_loss.result import Err, Ok, Result
+from obb_loss.set_context import SetCostContext
 from obb_loss.set_data import PackedPredictions, PackedTargets, validate_sets
+from obb_loss.set_defaults import default_set_costs
 from obb_loss.solver import solve_costs
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from obb_loss.matching import Assignment
-    from obb_loss.packed import InputError
     from obb_loss.pairwise import CostBlock
 
-_DEFAULT_CONFIG = SetMatcherConfig()
-
-
-def _chunk_cost(
-    preds: PackedPredictions,
-    targets: PackedTargets,
-    pred_indices: Tensor,
-    target_indices: Tensor,
-    config: SetMatcherConfig,
-) -> Result[Tensor, InputError]:
-    """Evaluate enabled costs for bounded pairs, without using target quality."""
-    values = torch.zeros(
-        pred_indices.shape, dtype=torch.float64, device=pred_indices.device
-    )
-    weights = config.weights
-    if weights.classification > 0:
-        classes = targets.labels[target_indices]
-        scores = preds.logits[pred_indices, classes].double().sigmoid()
-        values = values - weights.classification * scores
-    if weights.l1 > 0 or weights.probiou > 0:
-        first = preds.geometry.boxes[pred_indices]
-        second = targets.geometry.boxes[target_indices]
-        if weights.l1 > 0:
-            values = values + weights.l1 * box_l1_loss(first, second)
-        if weights.probiou > 0:
-            match validate_pairs(first, second):
-                case Err() as failure:
-                    return failure
-                case Ok():
-                    values = values + weights.probiou * stable_probiou_loss(
-                        first, second
-                    )
-    return validate_output(values, pred_indices.shape[0], pred_indices.device)
+_DEFAULT_CONFIG = MatcherConfig()
 
 
 def _fill_cost_block(
@@ -66,52 +36,54 @@ def _fill_cost_block(
     block: CostBlock,
     preds: PackedPredictions,
     targets: PackedTargets,
-    config: SetMatcherConfig,
+    config: MatcherConfig,
+    callbacks: LossComposition[SetCostContext],
 ) -> Result[Tensor, InputError]:
-    """Write one rectangular cost block in bounded row-major chunks."""
-    for start in range(block.start, block.end, config.storage.chunk_size):
-        end = min(start + config.storage.chunk_size, block.end)
+    """Evaluate same-sample aligned candidate chunks without cross-sample pairs."""
+    for start in range(block.start, block.end, config.chunk_size):
+        end = min(start + config.chunk_size, block.end)
         index = torch.arange(
             start - block.start, end - block.start, device=values.device
         )
-        pred_indices = block.pred_start + index // block.columns
-        target_indices = block.target_start + index % block.columns
-        match _chunk_cost(preds, targets, pred_indices, target_indices, config):
+        context = SetCostContext(
+            preds,
+            targets,
+            block.pred_start + index // block.columns,
+            block.target_start + index % block.columns,
+        )
+        match callbacks(context):
             case Err() as failure:
                 return failure
-            case Ok(value=cost):
-                values[start:end] = cost
+            case Ok(value=outputs):
+                pass
+        total = context.zero()
+        for output in outputs:
+            total = total + output.values
+        match validate_output(total, end - start, values.device):
+            case Err() as failure:
+                return failure
+            case Ok():
+                values[start:end] = total
     return Ok(values)
 
 
-def set_pairwise_costs(
+def _pairwise(
     preds: PackedPredictions,
     targets: PackedTargets,
-    config: SetMatcherConfig = _DEFAULT_CONFIG,
+    config: MatcherConfig,
+    callbacks: LossComposition[SetCostContext],
 ) -> Result[PackedCosts, InputError]:
-    """Build classification, L1, and ProbIoU cost blocks within each sample.
-
-    Costs use negative sigmoid target-class probability, center/side L1, and ProbIoU loss. Disabled costs skip evaluation. Direct calls retain gradients.
-
-    Args:
-        preds: Packed geometry and [queries, classes] logits for one decoder layer,
-            sharing box order and device.
-        targets: Packed reference geometry, int64 class labels, and caller-supplied
-            [targets] quality in [0, 1]; labels and quality follow box order.
-            Quality is validated but does not affect matching costs.
-        config: Independent matching-cost weights and temporary/full storage limits;
-            unrelated to training-loss weights.
-
-    Returns:
-        Ok(PackedCosts) with float64 row-major values or Err(InputError) for invalid
-        records, label bounds, enabled numerical domains, costs, or storage limits.
-    """
+    """Validate sets and construct packed costs using an already registered composition."""
+    if not callbacks.terms:
+        return Err(
+            InputError(ErrorKind.CONFIG, "costs", "at least one enabled cost required")
+        )
     match validate_sets(preds, targets):
         case Err() as failure:
             return failure
         case Ok():
             pass
-    match cost_blocks(preds.geometry, targets.geometry, config.storage.max_pairs):
+    match cost_blocks(preds.geometry, targets.geometry, config.max_pairs):
         case Err() as failure:
             return failure
         case Ok(value=blocks):
@@ -120,7 +92,7 @@ def set_pairwise_costs(
     with torch.autocast(preds.logits.device.type, enabled=False):
         values = torch.empty(total, dtype=torch.float64, device=preds.logits.device)
         for block in blocks:
-            match _fill_cost_block(values, block, preds, targets, config):
+            match _fill_cost_block(values, block, preds, targets, config, callbacks):
                 case Err() as failure:
                     return failure
                 case Ok():
@@ -128,42 +100,78 @@ def set_pairwise_costs(
     return Ok(PackedCosts(values, blocks))
 
 
-class SetHungarianMatcher(nn.Module):
-    """Assign queries to labeled targets with independent weighted set costs."""
+def set_pairwise_costs(
+    preds: PackedPredictions,
+    targets: PackedTargets,
+    config: MatcherConfig = _DEFAULT_CONFIG,
+    *,
+    costs: Mapping[str, LossFunction[SetCostContext]]
+    | DefaultComposition = DefaultComposition.BUILTINS,
+) -> Result[PackedCosts, InputError]:
+    """Build composed candidate costs independently within each sample.
 
-    def __init__(self, config: SetMatcherConfig = _DEFAULT_CONFIG) -> None:
-        """Configure classification-aware set assignment.
+    Args:
+        preds: Packed geometry and [queries, classes] logits in query order.
+        targets: Same-sample-count/device references, labels, and caller quality.
+            Default costs ignore quality; custom callbacks may explicitly use it.
+        config: Chunk size and complete packed cost storage limits.
+        costs: Named callbacks returning weighted [pairs] values through Result.
+            Omission selects default sigmoid-class/L1/ProbIoU costs. Lower total
+            cost is preferable; no normalization or reduction is applied.
+
+    Returns:
+        Ok(float64 row-major PackedCosts), retaining direct-call gradients, or a
+        typed error for empty composition, invalid inputs, callback outputs,
+        numerical domains, or storage limits.
+    """
+    functions = default_set_costs() if isinstance(costs, DefaultComposition) else costs
+    return _pairwise(preds, targets, config, LossComposition(functions))
+
+
+class SetHungarianMatcher(nn.Module):
+    """Own cost callbacks and assign packed queries to references within each sample."""
+
+    def __init__(
+        self,
+        config: MatcherConfig = _DEFAULT_CONFIG,
+        *,
+        costs: Mapping[str, LossFunction[SetCostContext]]
+        | DefaultComposition = DefaultComposition.BUILTINS,
+    ) -> None:
+        """Register a cost composition with independent memory limits.
 
         Args:
-            config: Independent class/L1/ProbIoU matching weights and chunk/full-cost
-                storage limits.
+            config: Positive chunk size and maximum complete candidate-pair count.
+            costs: Named weighted callbacks over bounded pairs; functions and typed
+                modules are supported. Omission selects the default costs. Explicit
+                zero-weight WeightedLoss callbacks are omitted, including their state.
         """
         super().__init__()
         self.config = config
+        functions = (
+            default_set_costs() if isinstance(costs, DefaultComposition) else costs
+        )
+        self.costs = LossComposition(functions)
 
     @override
-    # Torch stubs declare variadic forward; this module intentionally narrows it.
+    # Native Torch stubs declare variadic forward; this packed matcher narrows it.
     def forward(  # pyrefly: ignore[bad-override]
         self, preds: PackedPredictions, targets: PackedTargets
     ) -> Result[Assignment, InputError]:
-        """Match queries and labeled targets independently within each sample.
-
-        The smaller side is fully paired. Matching disables autograd and transfers costs to the shared CPU solver; indices return to the input device.
+        """Match queries and references independently, with autograd disabled.
 
         Args:
-            preds: Packed geometry and [queries, classes] logits for one decoder layer,
-                sharing box order and device.
-            targets: Packed reference geometry, int64 class labels, and caller-supplied
-                [targets] quality in [0, 1]; labels and quality follow box order.
-                Quality never changes assignment.
+            preds: Packed query geometry/logits on a shared CPU/CUDA device.
+            targets: Packed references and labels sharing sample count and coordinate
+                units with preds; quality is available only to explicit custom costs.
 
         Returns:
-            Ok(Assignment) with detached paired global indices and repeated offsets for
-            empty samples, or Err(InputError) for invalid records, costs, enabled
-            domains, or storage limits.
+            Ok(detached global pair indices and sample offsets) or a typed cost/input
+            error. The smaller side is fully paired. Costs transfer to the shared CPU
+            solver, and assignment indices return to the input device.
         """
         with torch.no_grad():
-            match set_pairwise_costs(preds, targets, self.config):
+            match _pairwise(preds, targets, self.config, self.costs):
                 case Err() as failure:
                     return failure
                 case Ok(value=costs):

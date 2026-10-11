@@ -177,3 +177,39 @@ def test_native_shapes_and_module_callbacks(tmp_path: Path) -> None:
     assert "expected Int[3], got Int[4]" in diagnostics
     assert "Custom.forward" in diagnostics
     assert "bad-assignment" in diagnostics
+
+
+def test_set_callback_context_and_result_types(tmp_path: Path) -> None:
+    """Accept typed modules and reject wrong contexts or unchecked tensor callbacks."""
+    source = tmp_path / "set_callbacks.py"
+    valid = (
+        "from __future__ import annotations\n"
+        "import obb_loss as obb\n"
+        "from torch import Tensor, nn\n"
+        "from typing_extensions import override\n"
+        "class Custom(nn.Module):\n"
+        "    @override\n"
+        "    def forward(self, context: obb.SetLossContext) -> obb.Result[Tensor, obb.InputError]:  # pyrefly: ignore[bad-override]\n"
+        "        return obb.Ok(context.zero())\n"
+        "callback: obb.LossFunction[obb.SetLossContext] = Custom()\n"
+        "criterion = obb.SetCriterion(losses={'custom': obb.WeightedLoss(callback, obb.WeightConfig(weight=2))})\n"
+    )
+    source.write_text(valid, encoding="utf-8")
+    command = [sys.executable, "-m", "tools.typecheck", str(source)]
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stdout + result.stderr
+    source.write_text(
+        valid
+        + "def naked(context: obb.SetLossContext) -> Tensor:\n"
+        + "    return context.zero()\n"
+        + "bad: obb.LossFunction[obb.SetLossContext] = naked\n"
+        + "def cost(context: obb.SetCostContext) -> obb.Result[Tensor, obb.InputError]:\n"
+        + "    return obb.Ok(context.zero())\n"
+        + "wrong_context = obb.SetCriterion(losses={'cost': cost})\n",
+        encoding="utf-8",
+    )
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    diagnostics = result.stdout + result.stderr
+    assert result.returncode != 0
+    assert "bad-assignment" in diagnostics
+    assert "dict value type `LossFunction[SetLossContext]`" in diagnostics

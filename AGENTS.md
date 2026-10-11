@@ -3,8 +3,9 @@
 PyTorch oriented-box losses, VFL/QFL, and a standalone matcher with packed layouts.
 Box criteria expose forward(preds: PackedBoxes, targets: PackedBoxes). Detector layers,
 auxiliary orchestration, and quality-target generation belong to the caller.
-SetCriterion owns matching and classification/L1/ProbIoU losses for one layer, with
-separate matching and training weights. Its richer packed records carry logits,
+SetCriterion owns matching, normalization, and reduction for one layer. Named loss
+callbacks return weighted raw sample sums; matcher cost callbacks return weighted
+bounded-pair values independently. Its richer packed records carry logits,
 labels, and caller-supplied quality. Forward returns typed losses or an input error.
 Set reductions operate on sample vectors: NONE retains samples, SUM/MEAN reduce them.
 Target-count normalization is explicitly PER_SAMPLE or PER_BATCH; positive external
@@ -36,6 +37,9 @@ autocast locally and convert internally. Cite primary papers and document numeri
 Keep optional components in separate files. Disabled terms are not instantiated or evaluated.
 Custom module components must register parameters/buffers. Configuration never serializes
 live callables. User training policy decisions must be explicit.
+Set callbacks return Result through LossFunction[SetLossContext/SetCostContext].
+WeightedLoss owns WeightConfig; criteria have no fixed component weight fields.
+Results report normalized weighted values in SetLosses.terms and their total.
 
 ## Versioning
 

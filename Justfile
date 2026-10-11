@@ -20,6 +20,7 @@ examples:
     uv run examples/classification.py
     uv run examples/custom_loss.py
     uv run examples/detr.py
+    uv run examples/custom_set_loss.py
 
 stress *args:
     uv run python -m tools.stress {{args}}

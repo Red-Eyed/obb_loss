@@ -75,8 +75,13 @@ from `criterion.forward(preds, targets)` and backpropagate `losses.total`.
 Pass `reduction=obb.Reduction.NONE` for `[batch]` losses, or SUM/MEAN for a scalar.
 Normalization is explicit: `normalizer=obb.TargetCount.PER_SAMPLE`, PER_BATCH,
 or a positive scalar. The defaults SUM/PER_BATCH preserve batch-wide target normalization.
-`obb.SetCriterionConfig.weights` controls training; `.matcher.weights` controls
-assignment independently. See [the DETR example](examples/detr.py) and
+Pass named callbacks through `SetCriterion(losses=..., matcher=...)`; use
+`obb.WeightedLoss(callback, obb.WeightConfig(weight=...))` to configure each term.
+Matcher cost callbacks own their weights independently. Results expose normalized
+weighted values through `losses.terms[name]` and their sum through `losses.total`.
+Extend `obb.default_set_losses()` with your own callback, including query regularizers
+over unmatched predictions. See [the custom set loss](examples/custom_set_loss.py),
+[the DETR example](examples/detr.py), and
 [set criterion contracts](docs/set_criterion.md).
 
 ```python

@@ -1,5 +1,6 @@
 """Use one set criterion per DETR decoder layer and aggregate losses in the caller."""
 
+from functools import partial
 from typing import NamedTuple
 
 import torch
@@ -25,7 +26,7 @@ def layer_loss(
         case obb.Err() as failure:
             return failure
         case obb.Ok(value=preds):
-            return criterion.forward(
+            return criterion(
                 preds,
                 targets,
                 reduction=obb.Reduction.NONE,
@@ -67,14 +68,27 @@ def main() -> None:
         case obb.Ok(value=targets):
             pass
     criterion = obb.SetCriterion(
-        obb.SetCriterionConfig(
-            weights=obb.SetWeights(classification=1.0, l1=5.0, probiou=2.0),
-            matcher=obb.SetMatcherConfig(
-                weights=obb.SetWeights(classification=2.0, l1=5.0, probiou=2.0),
-                storage=obb.MatcherConfig(chunk_size=128, max_pairs=10000),
+        matcher=obb.SetHungarianMatcher(
+            obb.MatcherConfig(chunk_size=128, max_pairs=10000),
+            costs={
+                "classification": obb.WeightedLoss(
+                    obb.set_classification_cost, obb.WeightConfig(weight=2)
+                ),
+                "l1": obb.WeightedLoss(obb.set_l1_cost, obb.WeightConfig(weight=5)),
+                "probiou": obb.WeightedLoss(
+                    obb.set_probiou_cost, obb.WeightConfig(weight=2)
+                ),
+            },
+        ),
+        losses={
+            "classification": partial(
+                obb.set_varifocal_loss, config=obb.VFLParameters(alpha=0.75, gamma=2)
             ),
-            classification=obb.VFLConfig(alpha=0.75, gamma=2.0),
-        )
+            "l1": obb.WeightedLoss(obb.set_l1_loss, obb.WeightConfig(weight=5)),
+            "probiou": obb.WeightedLoss(
+                obb.set_probiou_loss, obb.WeightConfig(weight=2)
+            ),
+        },
     )
     total = boxes.double().sum() * 0
     for index, output in enumerate(outputs):

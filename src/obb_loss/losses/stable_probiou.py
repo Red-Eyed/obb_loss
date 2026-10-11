@@ -17,6 +17,7 @@ from einops import rearrange
 from torch import Tensor
 
 from obb_loss.packed import ErrorKind, InputError, validate_geometry
+from obb_loss.reduction import sum_samples
 from obb_loss.result import Err, Ok, Result
 
 if TYPE_CHECKING:
@@ -24,8 +25,51 @@ if TYPE_CHECKING:
 
     from shape_extensions import Elements, IntTuple
 
+    from obb_loss.set_context import SetCostContext, SetLossContext
+
     P = TypeVar("P", bound=IntTuple)
     T = TypeVar("T", bound=IntTuple)
+
+
+def set_probiou_loss(context: SetLossContext) -> Result[Tensor[[int]], InputError]:
+    """Validate matched ProbIoU domains and sum Hellinger losses per sample.
+
+    Args:
+        context: Validated sets and gathered assignment pairs; unmatched queries do
+            not contribute to this box loss.
+
+    Returns:
+        Ok(float64 [samples] unweighted raw sums), or a typed numerical-domain error.
+    """
+    first, second = context.matched_preds.boxes, context.matched_targets.boxes
+    match validate_pairs(first, second):
+        case Err() as failure:
+            return failure
+        case Ok():
+            return Ok(
+                sum_samples(
+                    stable_probiou_loss(first, second), context.assignment.cu_seqlens
+                )
+            )
+
+
+def set_probiou_cost(context: SetCostContext) -> Result[Tensor[[int]], InputError]:
+    """Validate and evaluate ProbIoU for each bounded candidate pair.
+
+    Args:
+        context: Validated sets and aligned global pair indices within one sample.
+
+    Returns:
+        Ok(float64 [pairs] Hellinger losses), or a typed numerical-domain error.
+        Values are unweighted and lower is preferable.
+    """
+    first = context.preds.geometry.boxes[context.pred_indices]
+    second = context.targets.geometry.boxes[context.target_indices]
+    match validate_pairs(first, second):
+        case Err() as failure:
+            return failure
+        case Ok():
+            return Ok(stable_probiou_loss(first, second))
 
 
 def _directions(boxes: Tensor) -> tuple[Tensor, Tensor]:

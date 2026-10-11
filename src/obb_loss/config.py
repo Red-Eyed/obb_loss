@@ -9,7 +9,6 @@ from pydantic import (
     Field,
     JsonValue,
     ValidationError,
-    model_validator,
 )
 
 from obb_loss.packed import ErrorKind, InputError
@@ -54,7 +53,33 @@ class ProbIoUConfig(LossConfig):
     kind: Literal["probiou"] = "probiou"
 
 
-class VFLConfig(LossConfig):
+class WeightConfig(BaseModel):
+    """Configure one callback's multiplier.
+
+    Attributes:
+        weight: Finite nonnegative multiplier; zero omits the callback from composition.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    weight: Nonnegative = 1.0
+
+
+class VFLParameters(BaseModel):
+    """Configure Varifocal math independently of weighting and reduction.
+
+    Attributes:
+        alpha: Finite nonnegative negative-class BCE multiplier.
+        gamma: Finite nonnegative exponent suppressing easy negatives.
+        quality_weighted: Weight positive BCE by caller quality when true.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    alpha: Nonnegative = 0.75
+    gamma: Nonnegative = 2.0
+    quality_weighted: bool = True
+
+
+class VFLConfig(LossConfig, VFLParameters):
     """Configure Varifocal modulation.
 
     Attributes:
@@ -67,12 +92,20 @@ class VFLConfig(LossConfig):
     """
 
     kind: Literal["vfl"] = "vfl"
-    alpha: Nonnegative = 0.75
-    gamma: Nonnegative = 2.0
-    quality_weighted: bool = True
 
 
-class QFLConfig(LossConfig):
+class QFLParameters(BaseModel):
+    """Configure Quality Focal math independently of weighting and reduction.
+
+    Attributes:
+        beta: Finite exponent >=1 controlling suppression near target quality.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    beta: Annotated[float, Field(ge=1, allow_inf_nan=False)] = 2.0
+
+
+class QFLConfig(LossConfig, QFLParameters):
     """Configure Quality Focal modulation.
 
     Attributes:
@@ -83,7 +116,6 @@ class QFLConfig(LossConfig):
     """
 
     kind: Literal["qfl"] = "qfl"
-    beta: Annotated[float, Field(ge=1, allow_inf_nan=False)] = 2.0
 
 
 class MatcherConfig(BaseModel):
@@ -99,75 +131,6 @@ class MatcherConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     chunk_size: Positive = 65536
     max_pairs: Annotated[int, Field(ge=0)] = 10_000_000
-
-
-class SetWeights(BaseModel):
-    """Configure independent component multipliers.
-
-    Attributes:
-        classification: Nonnegative multiplier for classification cost or loss,
-            according to its owning config.
-        l1: Nonnegative multiplier for center/side L1 cost or loss.
-        probiou: Nonnegative multiplier for ProbIoU cost or loss. Zero disables the
-            corresponding computation.
-    """
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-    classification: Nonnegative = 1.0
-    l1: Nonnegative = 5.0
-    probiou: Nonnegative = 2.0
-
-
-class SetMatcherConfig(BaseModel):
-    """Configure set assignment.
-
-    Attributes:
-        weights: Class/L1/ProbIoU assignment weights, independent of training
-            weights; at least one must be positive.
-        storage: Temporary chunk-size and complete-pair storage limits.
-    """
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-    weights: SetWeights = SetWeights()
-    storage: MatcherConfig = MatcherConfig()
-
-    @model_validator(mode="after")
-    def require_cost(self) -> "SetMatcherConfig":
-        """Require at least one enabled assignment cost."""
-        if self.weights.classification + self.weights.l1 + self.weights.probiou == 0:
-            raise ValueError("at least one matching cost must be enabled")
-        return self
-
-
-class SetCriterionConfig(BaseModel):
-    """Configure one layer of set supervision.
-
-    Attributes:
-        weights: Class/L1/ProbIoU training multipliers; all-zero loss weights are
-            allowed.
-        matcher: Independent assignment weights and cost-storage limits.
-        classification: VFL/QFL formulation settings; weight/reduction must retain
-            defaults because the set criterion owns both operations.
-    """
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-    weights: SetWeights = SetWeights()
-    matcher: SetMatcherConfig = SetMatcherConfig()
-    classification: Annotated[VFLConfig | QFLConfig, Field(discriminator="kind")] = (
-        VFLConfig()
-    )
-
-    @model_validator(mode="after")
-    def require_unweighted_classification(self) -> "SetCriterionConfig":
-        """Keep weighting and normalization exclusively in the set criterion."""
-        if (
-            self.classification.weight != 1
-            or self.classification.reduction != Reduction.MEAN
-        ):
-            raise ValueError(
-                "classification weight/reduction are controlled by the set criterion"
-            )
-        return self
 
 
 def parse_config(model: type[C], raw: JsonValue) -> Result[C, InputError]:
