@@ -3,6 +3,9 @@
 PyTorch oriented-box losses, VFL/QFL, and a standalone matcher with packed layouts.
 Box criteria expose forward(preds: PackedBoxes, targets: PackedBoxes). Detector layers,
 auxiliary orchestration, and quality-target generation belong to the caller.
+SetCriterion owns matching and classification/L1/ProbIoU losses for one layer, with
+separate matching and training weights. Its richer packed records carry logits,
+labels, and caller-supplied quality. Forward returns typed losses or an input error.
 Follow the user's global instructions and the local ignored implementation plan.
 
 ## Checks

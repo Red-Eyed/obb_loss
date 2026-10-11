@@ -55,7 +55,7 @@ def validate_output(
     return Ok(values)
 
 
-def _blocks(
+def cost_blocks(
     preds: PackedBoxes, targets: PackedBoxes, limit: int
 ) -> Result[tuple[CostBlock, ...], InputError]:
     """Transfer offsets once to host and reject solver storage beyond the limit."""
@@ -136,7 +136,7 @@ def pairwise_costs(
                 return failure
             case Ok():
                 pass
-    match _blocks(preds, targets, config.max_pairs):
+    match cost_blocks(preds, targets, config.max_pairs):
         case Err() as failure:
             return failure
         case Ok(value=blocks):

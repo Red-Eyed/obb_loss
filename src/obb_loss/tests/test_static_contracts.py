@@ -80,3 +80,27 @@ def test_pytest_rejects_unknown_markers(tmp_path: Path) -> None:
     )
     assert result.returncode != 0
     assert "not_registered" in result.stdout
+
+
+def test_set_criterion_requires_records_and_result_narrowing(tmp_path: Path) -> None:
+    """Reject box-only records and unchecked loss access in the high-level criterion."""
+    source = tmp_path / "set_contract.py"
+    source.write_text(
+        "import obb_loss as obb\n"
+        "from torch import Tensor\n"
+        "def misuse(criterion: obb.SetCriterion, preds: obb.PackedPredictions, "
+        "targets: obb.PackedTargets, boxes: obb.PackedBoxes) -> Tensor:\n"
+        "    criterion.forward(boxes, boxes)\n"
+        "    return criterion.forward(preds, targets).total\n",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        ["pyrefly", "check", "--config", "pyrefly.toml", str(source)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    diagnostics = result.stdout + result.stderr
+    assert result.returncode != 0
+    assert "bad-argument-type" in diagnostics
+    assert "missing-attribute" in diagnostics

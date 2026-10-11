@@ -1,7 +1,7 @@
 # Verification evidence
 
 Local checks use Python 3.11.15, PyTorch 2.14.1, and macOS arm64 CPU. CUDA tests are
-present but unverified locally: 58 tests passed, 38 CUDA cases skipped. The portable
+present but unverified locally: 79 tests passed, 55 CUDA cases skipped. The portable
 `py3-none-any` wheel was installed in an isolated Python 3.11 environment and its
 public forward/backward API verified; all README Python examples also executed.
 CI is configured to test Python 3.11–3.14 on Linux; its execution is
@@ -15,6 +15,14 @@ matrix conditioning is unsuitable. VFL/QFL use scalar paper equations and gradch
 Matcher optimality is verified against exhaustive rectangular assignments, with empty
 segments, sample isolation, uniqueness, bounded callback chunks, and gradient-preserving
 gather. Strict checker negative fixtures verify Result narrowing and callback signatures.
+
+Set-criterion tests cover independent matching/training weights, analytic weighted
+costs, 16 seeded rectangular assignments against brute-force optima, VFL/QFL parity,
+L1 gradcheck, caller-quality gradients, disabled-term skipping, field revalidation,
+empty samples, and all four floating input dtypes under outer autocast. The DETR
+example verifies final and auxiliary layer backward passes. The high-level matcher
+and criterion contain validation and a CPU solver; fullgraph compilation coverage
+applies to the plain ProbIoU criterion, not this orchestration API.
 
 ## Seeded CPU stress study
 

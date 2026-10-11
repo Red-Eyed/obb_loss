@@ -67,6 +67,15 @@ sample. See [matching contracts](docs/matching.md) for limits and solver referen
 
 ## Quality classification
 
+For one complete decoder layer, `obb.SetCriterion` owns matching and weighted
+classification, L1, and ProbIoU losses. Use `obb.pack_predictions(boxes, logits)` and
+`obb.pack_targets(samples, device=..., dtype=...)`, where each `obb.TargetSample`
+contains boxes, class labels, and caller-supplied quality. Match `obb.Ok(value=losses)`
+from `criterion.forward(preds, targets)` and backpropagate `losses.total`.
+`obb.SetCriterionConfig.weights` controls training; `.matcher.weights` controls
+assignment independently. See [the DETR example](examples/detr.py) and
+[set criterion contracts](docs/set_criterion.md).
+
 ```python
 import obb_loss as obb
 

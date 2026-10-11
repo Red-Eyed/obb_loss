@@ -1,5 +1,14 @@
 # Loss formulations and numerical policy
 
+## Box L1 and set supervision
+
+Nicolas Carion et al., *End-to-End Object Detection with Transformers*, ECCV 2020,
+[arXiv:2005.12872](https://arxiv.org/abs/2005.12872). `box_l1_loss` sums absolute
+differences of `(cx, cy, width, height)` per aligned pair. Direction is excluded;
+ProbIoU supplies orientation supervision. L1 is computed in float64 and depends
+on coordinate units. Independent matching/loss weights and per-layer supervision
+are documented in [set_criterion.md](set_criterion.md).
+
 ## ProbIoU
 
 Jeffri Murrugarra-Llerena, Luis Felipe Zeni, Lucas N. Kirsten, and Claudio R. Jung.
