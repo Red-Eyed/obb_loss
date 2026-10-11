@@ -3,7 +3,7 @@
 from enum import Enum
 from typing import Annotated, Literal, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
 
 from obb_loss.packed import ErrorKind, InputError
 from obb_loss.result import Err, Ok, Result
@@ -59,8 +59,8 @@ class MatcherConfig(BaseModel):
     max_pairs: Annotated[int, Field(ge=0)] = 10_000_000
 
 
-def parse_config(model: type[C], raw: object) -> Result[C, InputError]:
-    """Validate external settings once, preserving failures as typed diagnostics."""
+def parse_config(model: type[C], raw: JsonValue) -> Result[C, InputError]:
+    """Validate JSON-compatible settings, returning typed validation failures."""
     try:
         return Ok(model.model_validate(raw))
     except ValidationError as error:

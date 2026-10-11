@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING, NamedTuple, assert_never
+from typing import TYPE_CHECKING, NamedTuple, assert_never, cast
 
 import torch
 from torch import Tensor, nn
@@ -46,9 +46,10 @@ class BoxTerm(nn.Module):
         self.function = spec.function
         self.weight = spec.weight
 
-    def evaluate(self, preds: Tensor, targets: Tensor) -> object:
-        """Contain nn.Module's untyped __call__ return at the adapter boundary."""
-        return self.function(preds, targets)
+    def evaluate(self, preds: Tensor, targets: Tensor) -> Tensor:
+        """Call the component with the builder's tensor input/output contract."""
+        # nn.Module.__call__ lacks the signature required by custom box terms.
+        return cast("BoxFunction", self.function)(preds, targets)
 
     @override
     def forward(self, preds: Tensor, targets: Tensor) -> Tensor:

@@ -3,22 +3,33 @@
 from collections.abc import Callable
 from datetime import UTC, datetime
 from time import perf_counter
-from typing import Annotated
+from typing import Annotated, TypeAlias
 
 import torch
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, CliApp, SettingsConfigDict
 
 from obb_loss import (
+    Assignment,
     HungarianMatcher,
     MatcherConfig,
     PackedBoxes,
     ProbIoULoss,
     pairwise_costs,
 )
-from obb_loss.result import Ok
+from obb_loss.packed import InputError
+from obb_loss.pairwise import PackedCosts
+from obb_loss.result import Ok, Result
 from obb_loss.solver import solve_costs
 from tools.stress import StressSettings, sample_pair
+
+StageOutput: TypeAlias = (
+    torch.Tensor
+    | Result[torch.Tensor, InputError]
+    | Result[PackedCosts, InputError]
+    | Result[Assignment, InputError]
+    | None
+)
 
 
 class BenchmarkSettings(BaseSettings):
@@ -50,7 +61,7 @@ class BenchmarkReport(BaseModel):
     cuda_peak_bytes: int
 
 
-def _time(call: Callable[[], object], repeats: int, device: torch.device) -> float:
+def _time(call: Callable[[], StageOutput], repeats: int, device: torch.device) -> float:
     """Synchronize CUDA around each measured stage and return mean elapsed time."""
     call()
     if device.type == "cuda":
@@ -90,7 +101,7 @@ def benchmark(settings: BenchmarkSettings) -> BenchmarkReport:
     assert isinstance(costs, Ok)
     if device.type == "cuda":
         torch.cuda.reset_peak_memory_stats(device)
-    stages: dict[str, Callable[[], object]] = {
+    stages: dict[str, Callable[[], StageOutput]] = {
         "trusted_loss": lambda: criterion.forward(preds, aligned),
         "checked_loss": lambda: criterion.checked(preds, aligned),
         "pairwise_costs": lambda: pairwise_costs(preds, targets, config),

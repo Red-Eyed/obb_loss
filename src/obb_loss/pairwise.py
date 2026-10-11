@@ -35,7 +35,7 @@ class PackedCosts(NamedTuple):
 
 
 def validate_output(
-    values: object, count: int, device: torch.device
+    values: Tensor, count: int, device: torch.device
 ) -> Result[Tensor, InputError]:
     """Check observable callback output; mathematical validity remains user-owned."""
     if not isinstance(values, Tensor):

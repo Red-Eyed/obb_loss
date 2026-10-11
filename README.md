@@ -108,7 +108,8 @@ if deliberately supplied to multiple builders. Use the same narrow function cont
 custom matcher costs. Config JSON cannot serialize/reconstruct Python callbacks; recreate
 custom composition before loading weights.
 
-`parse_config` returns typed validation errors for external settings. Direct Pydantic
+`parse_config` accepts JSON-compatible values and returns typed validation errors for
+external settings. Direct Pydantic
 model construction retains its ordinary exception semantics. `build_loss` constructs a
 built-in module from validated `ProbIoUConfig`, `VFLConfig`, or `QFLConfig`.
 

@@ -13,6 +13,7 @@ from obb_loss.packed import ErrorKind, InputError
 from obb_loss.result import Err, Ok, Result
 
 if TYPE_CHECKING:
+    from numpy.typing import NDArray
     from torch import Tensor
 
     from obb_loss.matching import Assignment
@@ -40,8 +41,8 @@ def solve_costs(costs: PackedCosts) -> Result[Assignment, InputError]:
             host[block.start : block.end], "(r c) -> r c", r=block.rows, c=block.columns
         )
         try:
-            rows: object
-            columns: object
+            rows: NDArray[np.int64]
+            columns: NDArray[np.int64]
             rows, columns = linear_sum_assignment(matrix.numpy())
         except ValueError as error:
             return Err(InputError(ErrorKind.DOMAIN, "assignment", str(error)))
