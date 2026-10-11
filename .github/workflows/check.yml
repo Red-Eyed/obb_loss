@@ -20,12 +20,8 @@ jobs:
           python-version: ${{ matrix.python }}
           enable-cache: true
       - run: uv sync --locked
-      - run: uv run ruff format --check src tools examples
-      - run: uv run ruff check src tools examples
-      - run: uv run python -m tools.typecheck
+      - run: uv run ruff format --check src tests
+      - run: uv run ruff check src tests
+      - run: uv run python -m tests.typecheck
       - run: uv run pytest
-      - run: uv run examples/matching.py
-      - run: uv run examples/classification.py
-      - run: uv run examples/detr.py
-      - run: uv run examples/custom_set_loss.py
       - run: uv build --wheel

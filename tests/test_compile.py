@@ -1,15 +1,15 @@
-"""Verify supported tensor-only execution across changing packed dimensions."""
+"""Verify supported tensor-only execution across changing pair dimensions."""
 
 import torch
 import torch.testing
 
-from obb_loss.criterion import ProbIoULoss
-from obb_loss.packed import PackedBatch
+import obb_loss as obb
+from tests.math_helpers import stable_probiou_loss
 
 
-def test_fullgraph_compiled_criterion_dynamic_sizes() -> None:
+def test_fullgraph_compiled_loss_dynamic_sizes() -> None:
     """AOT eager compilation preserves outputs and backward for different pair counts."""
-    criterion = ProbIoULoss()
+    criterion = obb.stable_probiou_loss
     compiled = torch.compile(
         criterion, backend="aot_eager", fullgraph=True, dynamic=True
     )
@@ -21,11 +21,11 @@ def test_fullgraph_compiled_criterion_dynamic_sizes() -> None:
         )
         second = first.detach().clone()
         second[:, 0] = 0
-        cu = torch.tensor([0, count])
-        packed1, packed2 = PackedBatch(first, cu), PackedBatch(second, cu)
-        actual = compiled(packed1, packed2)
-        expected = criterion.forward(packed1, packed2)
+        result = compiled(first, second)
+        assert isinstance(result, obb.Ok)
+        actual = result.value
+        expected = stable_probiou_loss(first, second)
         torch.testing.assert_close(actual, expected)
-        actual.backward()
+        actual.sum().backward()
         assert first.grad is not None
         assert torch.isfinite(first.grad).all()

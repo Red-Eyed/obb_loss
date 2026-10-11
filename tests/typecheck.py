@@ -25,7 +25,7 @@ def main() -> int:
             "shapes",
             "python",
             "-m",
-            "tools.typecheck",
+            "tests.typecheck",
             *sys.argv[1:],
         ]
     else:

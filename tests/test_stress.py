@@ -2,7 +2,7 @@
 
 import pytest
 
-from tools.stress import InputDtype, StressSettings, simulate
+from tests.simulation import InputDtype, StressSettings, simulate
 
 
 @pytest.mark.stress

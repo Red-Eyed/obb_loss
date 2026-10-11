@@ -1,47 +1,27 @@
 # obb_loss
 
-PyTorch oriented-box losses, VFL/QFL, and a standalone matcher with packed layouts.
-Box criteria consume PackedBatch(values, cu_seqlens). Predictions contains packed
-boxes and aligned logits; Targets contains packed boxes and aligned labels.
-SetCriterion(config) owns matching, normalization and reduction for one layer;
-forward takes Predictions, Targets and reduction. Subclasses override loss methods
-or compute_losses to add named weighted sample vectors. Matcher weights are
-independent from training weights. Classification quality is explicitly supplied
-by overriding classification_quality after matching; it is not target annotation.
-Detector layer orchestration belongs to the caller. Public failures return typed errors.
-Set reductions operate on sample vectors: NONE retains samples, SUM/MEAN reduce them.
-Target-count normalization is explicitly PER_SAMPLE or PER_BATCH; positive external
-divisors are supported. Defaults SUM/PER_BATCH preserve batch-normalized losses.
-Follow the user's global instructions and the local ignored implementation plan.
+This repository contains pure PyTorch losses in `src/obb_loss/losses/` and
+focused tests in `tests/`. Keep it small: no detector harness, matcher, packed
+records, configuration framework, builders, or callback machinery.
 
-## Checks
+Public losses return the small `Ok`/`Err` union defined in `result.py`. Each loss
+module owns a metadata validation helper for its shape, floating dtype and
+shared CPU/CUDA device contract. Do not scan tensor values or add checked APIs.
+Numerical domain requirements belong in function docstrings.
 
-Use uv for Python commands. Separate configs live in `ruff.toml`, `pyrefly.toml`, and
-`pytest.ini`. Run `just check` for formatting, lint, types, and tests; do not weaken
-checks or hide missing imports/Any to pass. Before commits run Ruff check, Ruff format,
-reread changed files, and Pyrefly on committed Python files, plus relevant pytest tests.
+Geometry is `(cx, cy, width, height, cos(theta), sin(theta))`. Inputs are borrowed
+and never mutated. Computation disables autocast locally and uses float64.
+Keep numerical reasoning next to the implementation and cite primary papers.
+Use einops for rearrangement and native Pyrefly shapes under TYPE_CHECKING so
+Python 3.11 runtime imports remain supported. Development defaults to 3.12.
 
-## Contracts
+Use uv for Python commands. Run `just check`: separate strict configurations
+live in `ruff.toml`, `pyrefly.toml`, and `pytest.ini`. Native shape checking runs
+through `uv run python -m tests.typecheck`. Keep independent mathematical oracles,
+metadata contract tests, gradient tests, and seeded stability simulations.
+CUDA tests skip when unavailable; CPU tests still run.
 
-Use strict Rustic Python: small local Ok/Err unions, precise error records, and match
-dispatch. Use NamedTuple tensor records, native Pyrefly shape annotations, einops rearrangement,
-and Pydantic configs outside tensor execution. Document every module, class, and function.
-Library tensors are borrowed and never mutated. Expected public failures return typed errors.
-Keep shape imports and symbols under TYPE_CHECKING with postponed annotations so
-Python 3.11 does not import the Python 3.12-only shape package. Run Pyrefly through
-`uv run python -m tools.typecheck`, which provisions the locked shape environment.
-Development defaults to Python 3.12; package metadata and runtime tests retain 3.11+.
-
-Pack at integration boundaries; preserve empty samples and autograd. Geometry is six
-coordinates `(cx, cy, w, h, cos(theta), sin(theta))`. Float64-required criteria disable
-autocast locally and convert internally. Cite primary papers and document numerical departures.
-
-Keep optional components in separate files. Disabled terms are not instantiated or evaluated.
-Custom module components must register parameters/buffers. Configuration never serializes
-live callables. User training policy decisions must be explicit.
-Results report normalized weighted values in SetLosses.terms and their total.
-
-## Versioning
-
-On main, bump package/user-visible changes and synchronize the lockfile. Runtime version
-comes from installed metadata. Commit verified units separately. Only the user publishes.
+Follow the user's global instructions. Before committing, run Ruff check,
+Ruff format, reread formatted files, Pyrefly, and relevant pytest tests.
+On main, synchronize package version and lockfile for user-visible changes.
+Only the user publishes packages. The ignored `plan/` is working material.

@@ -1,35 +1,22 @@
-check: fmt-check lint types test examples
+check: fmt-check lint types test
 
 fmt:
-    uv run ruff format src tools examples
+    uv run ruff format src tests
 
 fmt-check:
-    uv run ruff format --check src tools examples
+    uv run ruff format --check src tests
 
 lint:
-    uv run ruff check src tools examples
+    uv run ruff check src tests
 
 types:
-    uv run python -m tools.typecheck
+    uv run python -m tests.typecheck
 
 test:
     uv run pytest
 
-examples:
-    uv run examples/matching.py
-    uv run examples/classification.py
-    uv run examples/detr.py
-    uv run examples/custom_set_loss.py
-
-stress *args:
-    uv run python -m tools.stress {{args}}
-
-benchmark *args:
-    uv run python -m tools.benchmark {{args}}
-
-test-cuda:
-    uv run python -c 'import torch; assert torch.cuda.is_available(), "CUDA hardware required"'
-    uv run pytest -m cuda
+stress:
+    uv run pytest -m stress
 
 build:
     uv build

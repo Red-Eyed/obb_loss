@@ -1,18 +1,17 @@
-"""Bounded seeded numerical probes; JSON evidence does not establish a universal proof."""
+"""Bounded seeded numerical probes for loss forward and backward stability."""
 
 from collections.abc import Callable
-from datetime import UTC, datetime
+from dataclasses import dataclass, field
 from enum import Enum
-from typing import Annotated, Literal, Self, assert_never, cast
+from typing import assert_never, cast
 
 import torch
 import torch.autograd
 from einops import rearrange
-from pydantic import BaseModel, Field, model_validator
-from pydantic_settings import BaseSettings, CliApp, SettingsConfigDict
 from torch import Tensor
 
-from obb_loss.losses.stable_probiou import stable_probiou_loss
+from obb_loss import Err, Ok, Result
+from tests.math_helpers import stable_probiou_loss
 
 
 class InputDtype(Enum):
@@ -40,65 +39,36 @@ def torch_dtype(value: InputDtype) -> torch.dtype:
             assert_never(value)
 
 
-class StressSettings(BaseSettings):
-    """Explicit simulation size, distributions, seed, device, and progress policy."""
+@dataclass(frozen=True)
+class StressSettings:
+    """Specify bounded test distributions and a reproducible seed."""
 
-    model_config = SettingsConfigDict(cli_implicit_flags=True, cli_kebab_case=True)
-
-    samples: Annotated[int, Field(gt=0)] = 10000
-    chunk_size: Annotated[int, Field(gt=0)] = 512
+    samples: int = 10000
+    chunk_size: int = 512
     seed: int = 901
     device: str = "cpu"
     dtype: InputDtype = InputDtype.FP64
-    min_log_scale: Annotated[float, Field(ge=-30, le=30, allow_inf_nan=False)] = -30
-    max_log_scale: Annotated[float, Field(ge=-30, le=30, allow_inf_nan=False)] = 30
-    max_log_aspect: Annotated[float, Field(ge=0, le=24, allow_inf_nan=False)] = 24
+    min_log_scale: float = -30
+    max_log_scale: float = 30
+    max_log_aspect: float = 24
     quiet: bool = False
 
-    @model_validator(mode="after")
-    def ordered_scale_range(self) -> Self:
-        """Reject inverted sampling intervals at CLI admission."""
-        if self.min_log_scale > self.max_log_scale:
-            raise ValueError("min_log_scale must be <= max_log_scale")
-        return self
 
-    def cli_cmd(self) -> None:
-        """Run bounded simulation, print JSON, and fail on unexpected arithmetic errors."""
-        import sys
+@dataclass
+class StressReport:
+    """Count finite outputs, input quantization and gradient-cast failures."""
 
-        def progress(done: int, total: int) -> None:
-            """Show chunk completion without polluting JSON stdout."""
-            if not self.quiet:
-                print(f"stress {done}/{total}", file=sys.stderr)
-
-        report = simulate(self, progress)
-        print(report.model_dump_json(indent=2))
-        if report.forward_failures or report.unexplained_backward_failures:
-            raise SystemExit(1)
-
-
-class NoFailure(BaseModel):
-    """Reason-carrying absence of an unexplained arithmetic failure."""
-
-    kind: Literal["no_failure"] = "no_failure"
-    reason: str = "No unexplained arithmetic failure observed"
-
-
-class StressReport(BaseModel):
-    """Bounded aggregate diagnostics with enough settings to reproduce failures."""
-
-    timestamp: datetime
-    torch_version: str
-    settings: StressSettings
-    evaluated: int
-    rejected_input_quantization: int
-    forward_failures: int
-    backward_failures: int
-    gradient_cast_overflows: int
-    unexplained_backward_failures: int
-    first_failure_sample: int | NoFailure
-    max_chunk_seen: int
-    analytic_max_error: float
+    evaluated: int = 0
+    rejected_input_quantization: int = 0
+    forward_failures: int = 0
+    backward_failures: int = 0
+    gradient_cast_overflows: int = 0
+    unexplained_backward_failures: int = 0
+    first_failure_sample: Result[int, str] = field(
+        default_factory=lambda: Err("No unexplained failure observed")
+    )
+    max_chunk_seen: int = 0
+    analytic_max_error: float = 0
 
 
 def sample_pair(
@@ -210,20 +180,7 @@ def simulate(
     Analytic accuracy is checked for representable float64 center-shift cases.
     Memory is O(chunk_size); only one first-failure index and counters are retained.
     """
-    report = StressReport(
-        timestamp=datetime.now(UTC),
-        torch_version=torch.__version__,
-        settings=settings,
-        evaluated=0,
-        rejected_input_quantization=0,
-        forward_failures=0,
-        backward_failures=0,
-        gradient_cast_overflows=0,
-        unexplained_backward_failures=0,
-        first_failure_sample=NoFailure(),
-        max_chunk_seen=0,
-        analytic_max_error=0,
-    )
+    report = StressReport()
     for start in range(0, settings.samples, settings.chunk_size):
         count = min(settings.chunk_size, settings.samples - start)
         first, second = sample_pair(count, settings, start)
@@ -243,14 +200,10 @@ def simulate(
         report.unexplained_backward_failures += int(unexplained.sum())
         failures = indices[forward_bad | unexplained]
         match report.first_failure_sample:
-            case NoFailure() if failures.numel():
-                report.first_failure_sample = int(failures[0])
+            case Err() if failures.numel():
+                report.first_failure_sample = Ok(int(failures[0]))
         report.analytic_max_error = max(
             report.analytic_max_error, _analytic_error(loss, indices, settings.dtype)
         )
         progress(start + count, settings.samples)
     return report
-
-
-if __name__ == "__main__":
-    CliApp.run(StressSettings)

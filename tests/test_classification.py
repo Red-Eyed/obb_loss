@@ -8,10 +8,7 @@ import torch.autograd
 import torch.testing
 from torch import Tensor
 
-from obb_loss.config import QFLConfig, Reduction, VFLConfig, parse_config
-from obb_loss.losses.quality_focal import QualityFocalLoss, quality_focal_loss
-from obb_loss.losses.varifocal import VarifocalLoss, varifocal_loss
-from obb_loss.result import Err, Ok
+from tests.math_helpers import quality_focal_loss, varifocal_loss
 
 
 @pytest.fixture
@@ -64,31 +61,10 @@ def test_extreme_logits(device: torch.device, dtype: torch.dtype) -> None:
         assert torch.isfinite(gradients).all()
 
 
-def test_wrappers_configs_and_quality_rejection(
-    quality_pair: tuple[Tensor, Tensor],
-) -> None:
-    """Wrappers preserve equations and checked quality rejection is typed."""
-    logits, quality = quality_pair
-    vfl = VarifocalLoss(VFLConfig(reduction=Reduction.SUM, weight=2))
-    result = vfl.checked(logits, quality)
-    assert isinstance(result, Ok)
-    torch.testing.assert_close(result.value, 2 * varifocal_loss(logits, quality).sum())
-    qfl = QualityFocalLoss(QFLConfig(reduction=Reduction.NONE))
-    torch.testing.assert_close(
-        qfl.forward(logits, quality), quality_focal_loss(logits, quality)
-    )
-    invalid = quality.detach().clone()
-    invalid[0, 0] = 2
-    assert isinstance(qfl.checked(logits, invalid), Err)
-    assert isinstance(parse_config(QFLConfig, {"beta": 0.5}), Err)
-    for config in (QFLConfig(), VFLConfig()):
-        assert config == type(config).model_validate_json(config.model_dump_json())
-
-
 def test_empty_quality(device: torch.device) -> None:
-    """Empty classification mean is finite and gradient-connected."""
+    """Empty classification vectors remain differentiable under caller reduction."""
     logits = torch.empty((0, 3), device=device).requires_grad_()
-    loss = QualityFocalLoss().forward(logits, logits.detach())
-    assert loss.item() == 0
-    loss.backward()
+    values = quality_focal_loss(logits, logits.detach())
+    assert values.shape == (0, 3)
+    values.sum().backward()
     assert logits.grad is not None
