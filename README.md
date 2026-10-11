@@ -4,6 +4,8 @@ Typed PyTorch oriented-box losses and standalone matching for DETR-like detector
 The package exposes pure functions, Pydantic-configured `nn.Module` criteria, and a
 typed custom-function builder. Detector-layer orchestration stays in your pipeline.
 
+See [runnable examples](examples/README.md) for complete CPU forward/backward scripts.
+
 The primary geometry is `(cx, cy, width, height, cos(theta), sin(theta))`, with positive
 sides and nonzero direction vectors. Coordinate units are explicit and shared by predictions
 and targets. Use `boxes_from_angles` to convert radians; no format inference occurs.

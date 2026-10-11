@@ -1,19 +1,24 @@
-check: fmt-check lint types test
+check: fmt-check lint types test examples
 
 fmt:
-    uv run ruff format src tools
+    uv run ruff format src tools examples
 
 fmt-check:
-    uv run ruff format --check src tools
+    uv run ruff format --check src tools examples
 
 lint:
-    uv run ruff check src tools
+    uv run ruff check src tools examples
 
 types:
     uv run pyrefly check
 
 test:
     uv run pytest
+
+examples:
+    uv run examples/matching.py
+    uv run examples/classification.py
+    uv run examples/custom_loss.py
 
 stress *args:
     uv run python -m tools.stress {{args}}
