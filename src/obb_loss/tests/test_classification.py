@@ -26,7 +26,7 @@ def quality_pair(device: torch.device) -> tuple[Tensor, Tensor]:
 
 
 def test_scalar_paper_equations(quality_pair: tuple[Tensor, Tensor]) -> None:
-    """Compare VFL/QFL to scalar BCE/modulation calculations independent of torch."""
+    """Compare each paper's Eq. (2) to scalar BCE/modulation independent of torch."""
     logits, targets = quality_pair
     vfl, qfl = varifocal_loss(logits, targets), quality_focal_loss(logits, targets)
     for index in range(3):

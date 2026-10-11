@@ -13,6 +13,8 @@ The rectangle maps to a Gaussian with center `(cx, cy)` and covariance
 `R diag(w²/12, h²/12) Rᵀ`. The loss is Hellinger distance
 `sqrt(1 - exp(-BD))`; similarity is one minus loss. It measures Gaussian overlap,
 not exact polygon intersection. Square orientation and antipodal directions are equivalent.
+In the 2021 preprint, Section 3.3 defines Gaussian BD in Eq. (7) and the Hellinger
+distance in Eq. (10); the implementation evaluates those quantities through residuals.
 
 The numerical reformulation comes from the local `ml-sandbox/04_stable_probiou` experiment:
 positive determinant residuals, detached pairwise scale normalization, float64 work,
@@ -34,12 +36,14 @@ Haoyang Zhang, Ying Wang, Feras Dayoub, and Niko Sünderhauf.
 *VarifocalNet: An IoU-aware Dense Object Detector*, CVPR 2021,
 [arXiv:2008.13367](https://arxiv.org/abs/2008.13367).
 Varifocal loss weights positive BCE by quality and negative BCE by `alpha * sigmoid(logit)^gamma`.
+The formulation is in Section 4.2, Eq. (2).
 The configurable non-quality-weighted positive variant follows the authors' implementation.
 
 Xiang Li et al. *Generalized Focal Loss: Learning Qualified and Distributed Bounding Boxes
 for Dense Object Detection*, NeurIPS 2020,
 [arXiv:2006.04388](https://arxiv.org/abs/2006.04388).
 Quality focal loss modulates BCE with `abs(target - sigmoid(logit))^beta`.
+The formulation is in Section 3, Eq. (2).
 Supported beta is >=1; smaller positive exponents have singular modulation derivatives
 at exact equality. VFL's negative modulation uses `exp(gamma * logsigmoid(logit))`
 to avoid fractional-power backward NaNs when sigmoid underflows. These are explicit

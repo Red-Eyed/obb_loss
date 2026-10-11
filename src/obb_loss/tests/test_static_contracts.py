@@ -48,3 +48,35 @@ def test_strict_configs_reject_any_and_missing_annotations(tmp_path: Path) -> No
     assert result.returncode != 0
     assert "explicit-any" in diagnostics
     assert "unannotated-return" in diagnostics
+
+
+def test_ruff_rejects_unannotated_code(tmp_path: Path) -> None:
+    """Strict linting reports annotations and undefined names on representative code."""
+    source = tmp_path / "lint_violation.py"
+    source.write_text("def bad(value):\n    return missing + value\n", encoding="utf-8")
+    result = subprocess.run(
+        ["ruff", "check", "--config", "ruff.toml", str(source)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "ANN001" in result.stdout
+    assert "F821" in result.stdout
+
+
+def test_pytest_rejects_unknown_markers(tmp_path: Path) -> None:
+    """Strict markers reject an unregistered tag rather than silently dropping coverage."""
+    source = tmp_path / "test_unknown_marker.py"
+    source.write_text(
+        "import pytest\n@pytest.mark.not_registered\ndef test_bad():\n    pass\n",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        ["pytest", "--collect-only", "-c", "pytest.ini", str(source)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "not_registered" in result.stdout

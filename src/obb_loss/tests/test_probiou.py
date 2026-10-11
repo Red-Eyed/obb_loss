@@ -38,7 +38,7 @@ def pair(device: torch.device) -> tuple[Tensor, Tensor]:
 
 
 def matrix_loss(first: Tensor, second: Tensor) -> Tensor:
-    """Evaluate the paper's Gaussian BD using independent matrix solves/logdets."""
+    """Evaluate preprint Eqs. (7)/(10) using independent matrix solves/logdets."""
     matrices: list[Tensor] = []
     for boxes in (first, second):
         direction = boxes[:, 4:6] / torch.linalg.vector_norm(

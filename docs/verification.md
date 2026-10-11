@@ -1,0 +1,62 @@
+# Verification evidence
+
+Local checks use Python 3.11.15, PyTorch 2.14.1, and macOS arm64 CPU. CUDA tests are
+present but unverified locally: 58 tests passed, 38 CUDA cases skipped. The portable
+`py3-none-any` wheel was installed in an isolated Python 3.11 environment and its
+public forward/backward API verified; all README Python examples also executed.
+CI is configured to test Python 3.11–3.14 on Linux; its execution is
+unverified until the repository workflow runs. AOT eager fullgraph compilation was checked
+for the packed ProbIoU criterion with changing pair counts, values, and backward. No
+Inductor, export, MPS, or CUDA throughput guarantee is claimed.
+
+Tests compare ProbIoU to independent matrix-solve/log-determinant Gaussian equations on
+well-conditioned inputs, plus analytic center-shift/thin-box values and gradients where
+matrix conditioning is unsuitable. VFL/QFL use scalar paper equations and gradcheck.
+Matcher optimality is verified against exhaustive rectangular assignments, with empty
+segments, image isolation, uniqueness, bounded callback chunks, and gradient-preserving
+gather. Strict checker negative fixtures verify Result narrowing and callback signatures.
+
+## Seeded CPU stress study
+
+Run date: 2026-10-11. Per dtype: 10000 generated pairs, seed 901, chunks of at most 512.
+Scale is log-uniform from `1e-30` to `1e30`; aspect ratios up to `1e24`. Cases alternate
+exact equality, analytic thin-axis shifts, and general pairs with varying side ratios and
+relative directions. Settings and the first unexplained failure index appear in JSON for
+reproduction. Sampling depends on chunk size; preserve every setting when reproducing.
+
+| Input dtype | Representable pairs evaluated | Input cast rejection | Forward failures | Backward cast overflows | Unexplained backward failures |
+|---|---:|---:|---:|---:|---:|
+| float64 | 10000 | 0 | 0 | 0 | 0 |
+| float32 | 9724 | 276 | 0 | 142 | 0 |
+| bfloat16 | 9367 | 633 | 0 | 28 | 0 |
+| float16 | 536 | 9464 | 0 | 52 | 0 |
+
+Float64 analytic-shift maximum absolute error: `5.551115123125783e-17`. Cast overflow is
+classified only when float64 gradients of the same quantized input are finite and exceed
+the leaf dtype range. That comparison diagnoses casting; it is not an independent mathematical
+oracle. Input rejection counts nonfinite coordinates and underflowed nonpositive sides.
+
+These distributions intentionally exceed sensible half-precision detector output ranges.
+Internal float64 cannot repair already underflowed or quantized geometry, nor preserve a
+gradient outside the leaf dtype range. Use suitable coordinate units and choose box-head
+output precision explicitly. No nonfinite result is replaced with a plausible score.
+The simulation supplies domain-scoped evidence rather than a proof for all possible inputs.
+
+## Small CPU benchmark
+
+Two images, 32 predictions and 8 targets per image, float64 inputs, chunk_size 65536,
+two measured repeats after warmup. Complete cost storage: 4096 bytes.
+
+| Stage | Mean wall time |
+|---|---:|
+| Trusted aligned loss | 0.083 ms |
+| Checked aligned loss | 0.149 ms |
+| Pairwise cost construction | 0.313 ms |
+| CPU solver including transfer boundary | 0.020 ms |
+| Complete matcher | 0.332 ms |
+| Aligned loss forward and backward | 0.331 ms |
+
+These small-workload timings are characterization, not production performance targets.
+CUDA peak allocated memory is reported by the benchmark on CUDA; CPU solver working
+memory and CPU peak resident memory are not yet instrumented. Timing stages are separated
+so validation/transfer costs remain visible. Custom term math requires its own tests.
