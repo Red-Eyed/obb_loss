@@ -33,14 +33,22 @@ autograd, and borrow inputs without mutation. Reduction, weighting, matching,
 and detector orchestration belong to the caller. Empty inputs produce empty
 outputs; choose an explicit policy before applying a mean.
 
-ProbIoU requires finite boxes, positive sides and nonzero direction vectors.
-Relative to the largest side in a pair, sides must be at least `1e-30` and center
-offsets at most `1e30`. The implementation uses positive covariance residuals,
-common scale normalization, `log1p`, and `expm1` to avoid cancellation. Translation
+ProbIoU requires finite boxes and nonnegative sides. Nonzero direction vectors
+are normalized internally, so `(1, 1)` and `(0.5, 0.5)` represent the same angle.
+If either box has a zero side or a `(0, 0)` direction, its pair receives loss
+`1` and similarity `0`, with zero ProbIoU gradients for both boxes. Safe geometry
+is substituted before computation to avoid NaN derivatives. An additional L1
+loss can still supply size gradients, unless the decoding derivative is zero.
+
+For nondegenerate pairs, relative to the largest side, sides must be at least
+`1e-30` and center offsets at most `1e30`. The implementation uses positive
+covariance residuals, common scale normalization, `log1p`, and `expm1` to avoid
+cancellation. Translation
 residuals saturate for distant pairs. Coincident boxes use a zero subgradient.
 Float64 internal computation cannot prevent overflow when gradients are cast
-back into low-precision leaf tensors. These numerical choices are explained
-next to the implementation.
+back into low-precision leaf tensors. Use FP32 box-head projection and decoding
+for small boxes: FP16 cannot represent some correct gradients even when the
+loss is finite. These numerical choices are explained next to the implementation.
 
 References:
 

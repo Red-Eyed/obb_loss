@@ -169,7 +169,7 @@ def test_direction_rescaling_and_symmetry(pair: tuple[Tensor, Tensor]) -> None:
 def degenerate_pair(
     device: torch.device, zero_coordinates: tuple[int, ...], invalid_input: str
 ) -> tuple[Tensor, Tensor]:
-    """Provide zero-sized boxes on either or both sides of a comparison."""
+    """Provide collapsed geometry on either or both sides of a comparison."""
     first = torch.tensor([[0.2, 0.1, 2, 1, 1, 0]], device=device, dtype=torch.float64)
     second = torch.tensor([[0, 0, 1.4, 0.8, 1, 0]], device=device, dtype=torch.float64)
     if invalid_input in ("prediction", "both"):
@@ -181,8 +181,8 @@ def degenerate_pair(
 
 @pytest.mark.parametrize(
     "zero_coordinates",
-    [(2,), (3,), (2, 3), (0, 1, 2, 3, 4, 5)],
-    ids=["zero-width", "zero-height", "zero-sides", "all-zero"],
+    [(2,), (3,), (2, 3), (4, 5), (0, 1, 2, 3, 4, 5)],
+    ids=["zero-width", "zero-height", "zero-sides", "zero-direction", "all-zero"],
 )
 @pytest.mark.parametrize("invalid_input", ["prediction", "target", "both"])
 def test_zero_sizes_require_finite_forward_backward(
@@ -192,49 +192,12 @@ def test_zero_sizes_require_finite_forward_backward(
     first, second = degenerate_pair
     loss = stable_probiou_loss(first, second)
     assert torch.isfinite(loss).all()
-    assert torch.isfinite(stable_probiou(first, second)).all()
+    similarity = stable_probiou(first, second)
+    torch.testing.assert_close(similarity, torch.zeros_like(similarity), atol=0, rtol=0)
+    torch.testing.assert_close(loss, torch.ones_like(loss), atol=0, rtol=0)
     gradients = torch.autograd.grad(loss.sum(), degenerate_pair)
     assert all(torch.isfinite(gradient).all() for gradient in gradients)
-
-
-@pytest.mark.parametrize("zero_coordinates", [(2,), (3,), (2, 3)])
-@pytest.mark.parametrize("invalid_input", ["prediction"])
-def test_masking_invalid_loss_after_computation_leaves_nan_gradients(
-    degenerate_pair: tuple[Tensor, Tensor],
-) -> None:
-    """A finite selected value does not remove invalid upstream derivatives."""
-    first, second = degenerate_pair
-    invalid = (first[..., 2:4] == 0).any(-1)
-    computed = stable_probiou_loss(first, second)
-    loss = torch.where(invalid, torch.ones_like(computed), computed)
-    torch.testing.assert_close(loss, torch.ones_like(loss))
-    gradients = torch.autograd.grad(loss.sum(), degenerate_pair)
-    assert all(not torch.isfinite(gradient).all() for gradient in gradients)
-
-
-def loss_with_test_fallback(first: Tensor, second: Tensor) -> Tensor:
-    """Experiment with safe pair substitution without changing the public loss."""
-    invalid = ((first[..., 2:4] == 0) | (second[..., 2:4] == 0)).any(-1)
-    dummy = first.new_tensor([0, 0, 1, 1, 1, 0])
-    mask = rearrange(invalid, "... -> ... 1")
-    safe_first = torch.where(mask, dummy, first)
-    safe_second = torch.where(mask, dummy, second)
-    computed = stable_probiou_loss(safe_first, safe_second)
-    return torch.where(invalid, torch.ones_like(computed), computed)
-
-
-@pytest.mark.parametrize(
-    "zero_coordinates",
-    [(2,), (3,), (2, 3), (0, 1, 2, 3, 4, 5)],
-)
-@pytest.mark.parametrize("invalid_input", ["prediction", "target", "both"])
-def test_safe_fallback_has_finite_zero_gradients(
-    degenerate_pair: tuple[Tensor, Tensor],
-) -> None:
-    """Replacing both boxes before geometry makes constant fallback backward safe."""
-    loss = loss_with_test_fallback(*degenerate_pair)
-    torch.testing.assert_close(loss, torch.ones_like(loss), atol=0, rtol=0)
-    for gradient in torch.autograd.grad(loss.sum(), degenerate_pair):
+    for gradient in gradients:
         torch.testing.assert_close(gradient, torch.zeros_like(gradient), atol=0, rtol=0)
 
 
@@ -245,7 +208,7 @@ def test_safe_fallback_preserves_valid_pair_gradients(
     first, second = pair
     mixed_first = torch.cat((torch.zeros_like(first), first.detach())).requires_grad_()
     mixed_second = torch.cat((second.detach(), second.detach())).requires_grad_()
-    actual = loss_with_test_fallback(mixed_first, mixed_second)
+    actual = stable_probiou_loss(mixed_first, mixed_second)
     expected = stable_probiou_loss(first, second)
     torch.testing.assert_close(actual[:1], torch.ones_like(expected), atol=0, rtol=0)
     torch.testing.assert_close(actual[1:], expected, atol=0, rtol=0)
@@ -267,7 +230,7 @@ def test_l1_supplies_size_gradients_alongside_safe_fallback(
     """L1 supplies a recovery gradient at zero box sizes despite constant ProbIoU."""
     first, second = degenerate_pair
     l1 = (first[..., :4] - second[..., :4]).abs().sum()
-    combined = loss_with_test_fallback(first, second).sum() + l1
+    combined = stable_probiou_loss(first, second).sum() + l1
     assert torch.isfinite(combined)
     actual = torch.autograd.grad(combined, first, retain_graph=True)[0]
     expected = torch.autograd.grad(l1, first)[0]
@@ -347,12 +310,12 @@ def test_zero_size_row_requires_finite_shared_target_gradient(
     assert all(torch.isfinite(gradient).all() for gradient in gradients)
 
 
-@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 @pytest.mark.parametrize("size", [1.0, 1e-3, 1e-5])
 def test_small_box_leaf_gradients_require_finite_values(
     device: torch.device, dtype: torch.dtype, size: float
 ) -> None:
-    """Check gradient casts to model output dtype even when float64 loss is finite."""
+    """FP32 and BF16 box outputs retain finite gradients for small positive boxes."""
     first = torch.tensor(
         [[0, 0, size, size, 1, 0]], device=device, dtype=dtype, requires_grad=True
     )
@@ -451,6 +414,8 @@ def test_broadcast_invalid_pairs_require_finite_forward_backward(
         (0.0, -1.0),
         (3.0, -4.0),
         (-3.0, 4.0),
+        (1.0, 1.0),
+        (0.5, 0.5),
         (1e-12, -1e-12),
         (1e4, -1e4),
     ],
@@ -462,6 +427,8 @@ def test_broadcast_invalid_pairs_require_finite_forward_backward(
         "negative-sine",
         "non-unit",
         "opposite-non-unit",
+        "equal-unit-components",
+        "equal-half-components",
         "tiny-pair",
         "large-pair",
     ],

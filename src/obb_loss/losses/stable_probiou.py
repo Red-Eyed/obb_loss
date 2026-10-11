@@ -72,6 +72,28 @@ def _directions(boxes: Tensor) -> tuple[Tensor, Tensor]:
     return normalized[..., 0], normalized[..., 1]
 
 
+def _degenerate(boxes: Tensor) -> Tensor:
+    """Identify zero sides and direction pairs with no defined angle."""
+    zero_side = (boxes[..., 2:4] == 0).any(-1)
+    zero_direction = (boxes[..., 4:6] == 0).all(-1)
+    return zero_side | zero_direction
+
+
+def _safe_pair(first: Tensor, second: Tensor) -> tuple[Tensor, Tensor, Tensor]:
+    """Substitute valid geometry for pairs with zero sides or zero directions."""
+    first64, second64 = first.double(), second.double()
+    degenerate = _degenerate(first64) | _degenerate(second64)
+    mask = rearrange(degenerate, "... -> ... 1")
+    dummy = first64.new_tensor([0, 0, 1, 1, 1, 0])
+    # Mask before divisions: selecting a finite loss afterward cannot undo
+    # NaN derivatives from an unused branch. Both inputs need safe geometry.
+    return (
+        torch.where(mask, dummy, first64),
+        torch.where(mask, dummy, second64),
+        degenerate,
+    )
+
+
 def _scaled_pair(first: Tensor, second: Tensor) -> tuple[Tensor, Tensor, Tensor]:
     """Express geometry relative to its detached largest side in float64."""
     first64, second64 = first.double(), second.double()
@@ -140,15 +162,17 @@ def stable_probiou_loss(
 ) -> Result[Tensor, InputError]:
     """Compute unreduced Gaussian-box Hellinger loss.
 
-    Relative to the largest side in each pair, sides must be >=1e-30 and
-    center offsets <=1e30. Autocast is disabled locally; borrowed inputs are
-    neither detached nor mutated. Equality uses a zero loss subgradient.
+    For nondegenerate pairs, relative to the largest side, sides must be
+    >=1e-30 and center offsets <=1e30. Autocast is disabled locally; borrowed
+    inputs are neither detached nor mutated. Equality uses a zero loss subgradient.
     Low-precision leaf gradient casts can overflow. Validation checks tensor
-    metadata only; callers must satisfy the numerical domain.
+    metadata only; callers must satisfy the numerical domain. If either box
+    has a zero side or a zero direction pair, loss is one with zero gradients
+    for that pair. Nonzero direction pairs are normalized internally.
 
     Args:
         preds: Predicted aligned boxes in (cx, cy, width, height, cos(theta),
-            sin(theta)) order; positive sides and nonzero directions, in shared
+            sin(theta)) order; nonnegative sides and finite directions, in shared
             coordinate units. Leading dimensions must broadcast with targets.
         targets: Reference boxes in the same order and units as preds, paired
             elementwise with predictions. Leading dimensions must broadcast with
@@ -164,14 +188,16 @@ def stable_probiou_loss(
         case Ok():
             pass
     with torch.autocast(device_type=preds.device.type, enabled=False):
-        root = _root_distance(preds, targets)
+        first, second, degenerate = _safe_pair(preds, targets)
+        root = _root_distance(first, second)
         distance = root.square()
         # Hellinger = sqrt(1 - exp(-BD)). expm1 retains small distances;
         # multiplying sqrt(BD) by a ratio with limit one avoids sqrt(0)
         # in backward and preserves the norm's chosen zero subgradient.
         safe = torch.where(distance > 0, distance, torch.ones_like(distance))
         factor = torch.where(distance > 0, -torch.expm1(-distance) / safe, 1.0).sqrt()
-        return Ok((root * factor).clamp(0, 1))
+        loss = (root * factor).clamp(0, 1)
+        return Ok(torch.where(degenerate, torch.ones_like(loss), loss))
 
 
 def stable_probiou(
@@ -180,15 +206,17 @@ def stable_probiou(
 ) -> Result[Tensor, InputError]:
     """Compute Gaussian-box similarity as one minus Hellinger loss.
 
-    Relative to the largest side in each pair, sides must be >=1e-30 and
-    center offsets <=1e30. Autocast is disabled locally; borrowed inputs are
-    neither detached nor mutated. Equality uses a zero loss subgradient.
+    For nondegenerate pairs, relative to the largest side, sides must be
+    >=1e-30 and center offsets <=1e30. Autocast is disabled locally; borrowed
+    inputs are neither detached nor mutated. Equality uses a zero loss subgradient.
     Low-precision leaf gradient casts can overflow. Validation checks tensor
-    metadata only; callers must satisfy the numerical domain.
+    metadata only; callers must satisfy the numerical domain. If either box
+    has a zero side or a zero direction pair, similarity is zero with zero
+    gradients for that pair. Nonzero direction pairs are normalized internally.
 
     Args:
         preds: Predicted aligned boxes in (cx, cy, width, height, cos(theta),
-            sin(theta)) order; positive sides and nonzero directions, in shared
+            sin(theta)) order; nonnegative sides and finite directions, in shared
             coordinate units. Leading dimensions must broadcast with targets.
         targets: Reference boxes in the same order and units as preds, paired
             elementwise with predictions. Leading dimensions must broadcast with
