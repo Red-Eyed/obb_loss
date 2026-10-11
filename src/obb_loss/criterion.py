@@ -28,7 +28,7 @@ def validate_alignment(
     ):
         return Err(
             InputError(
-                ErrorKind.ALIGNMENT, "cu_seqlens", "aligned image counts must match"
+                ErrorKind.ALIGNMENT, "cu_seqlens", "aligned sample counts must match"
             )
         )
     match validate_pairs(preds.boxes, targets.boxes):

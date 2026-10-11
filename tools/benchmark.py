@@ -26,7 +26,7 @@ class BenchmarkSettings(BaseSettings):
 
     model_config = SettingsConfigDict(cli_implicit_flags=True, cli_kebab_case=True)
 
-    images: Annotated[int, Field(gt=0)] = 4
+    samples: Annotated[int, Field(gt=0)] = 4
     queries: Annotated[int, Field(gt=0)] = 128
     targets: Annotated[int, Field(gt=0)] = 32
     repeats: Annotated[int, Field(gt=0)] = 5
@@ -68,7 +68,7 @@ def benchmark(settings: BenchmarkSettings) -> BenchmarkReport:
     import sys
 
     device = torch.device(settings.device)
-    count = settings.images * settings.queries
+    count = settings.samples * settings.queries
     geometry = StressSettings(
         samples=count,
         device=settings.device,
@@ -77,10 +77,10 @@ def benchmark(settings: BenchmarkSettings) -> BenchmarkReport:
         max_log_aspect=1,
     )
     first, second = sample_pair(count, geometry, 0)
-    pred_cu = torch.arange(settings.images + 1, device=device) * settings.queries
-    target_count = settings.images * settings.targets
+    pred_cu = torch.arange(settings.samples + 1, device=device) * settings.queries
+    target_count = settings.samples * settings.targets
     target_boxes, _ = sample_pair(target_count, geometry, 1000)
-    target_cu = torch.arange(settings.images + 1, device=device) * settings.targets
+    target_cu = torch.arange(settings.samples + 1, device=device) * settings.targets
     preds, targets = PackedBoxes(first, pred_cu), PackedBoxes(target_boxes, target_cu)
     aligned = PackedBoxes(second, pred_cu)
     config = MatcherConfig(chunk_size=settings.chunk_size)

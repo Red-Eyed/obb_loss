@@ -37,12 +37,12 @@ class InputError(NamedTuple):
 
 
 class PackedBoxes(NamedTuple):
-    """Borrow `[n, 6]` geometry and `[b+1]` image offsets without mutating them.
+    """Borrow `[n, 6]` geometry and `[b+1]` sample offsets without mutating them.
 
     Geometry is cx, cy, positive width/height, and a nonzero single-angle direction.
     Centers and sides use one shared coordinate frame/unit. Records are immutable;
     tensor storage is not. Callers must preserve admitted contents during execution.
-    Repeated offsets retain empty images. Direct construction is the trusted path.
+    Repeated offsets retain empty samples. Direct construction is the trusted path.
     """
 
     # Jaxtyping dimensions are strings, not Python expressions.
@@ -72,7 +72,7 @@ def validate_geometry(
 def validate_layout(
     offsets: Tensor, total: int, device: torch.device
 ) -> Result[Tensor, InputError]:
-    """Admit monotonic same-device offsets, including a zero-image `[0]` layout."""
+    """Admit monotonic same-device offsets, including a zero-sample `[0]` layout."""
     if offsets.ndim != 1 or offsets.numel() == 0:
         return Err(InputError(ErrorKind.SHAPE, "cu_seqlens", "expected nonempty [b+1]"))
     if offsets.dtype not in (torch.int32, torch.int64):
@@ -106,8 +106,8 @@ def make_packed_boxes(
             return Ok(PackedBoxes(boxes, cu_seqlens))
 
 
-def image_indices(packed: PackedBoxes) -> Int[Tensor, "n"]:  # noqa: F821, UP037
-    """Map each box to its image without lists or data-dependent output sizing."""
+def sample_indices(packed: PackedBoxes) -> Int[Tensor, "n"]:  # noqa: F821, UP037
+    """Map each box to its sample without lists or data-dependent output sizing."""
     cu = packed.cu_seqlens
     return torch.repeat_interleave(
         torch.arange(cu.shape[0] - 1, device=cu.device),

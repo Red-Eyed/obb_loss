@@ -28,7 +28,7 @@ class TrainableBoxTerm(nn.Module):
 
 @pytest.fixture
 def packed_pair(device: torch.device) -> tuple[PackedBoxes, PackedBoxes]:
-    """Create one aligned image with two matched prediction/target pairs."""
+    """Create one aligned sample with two matched prediction/target pairs."""
     first = torch.tensor(
         [[0.3, 0, 2, 1, 1, 0], [0.5, 0, 2, 1, 1, 0]],
         dtype=torch.float64,

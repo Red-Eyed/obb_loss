@@ -19,7 +19,7 @@ from obb_loss.result import Err, Ok
 
 @pytest.fixture
 def matching_pair(device: torch.device) -> tuple[PackedBoxes, PackedBoxes]:
-    """Create irregular two-image geometry with one empty target image."""
+    """Create irregular two-sample geometry with one empty target sample."""
     first = torch.tensor(
         [
             [0, 0, 2, 1, 1, 0],
@@ -104,18 +104,18 @@ def test_chunk_limit_and_cost_reference(
 def test_more_targets_than_queries(
     matching_pair: tuple[PackedBoxes, PackedBoxes],
 ) -> None:
-    """Rectangular matching assigns the smaller side without dropping image identity."""
+    """Rectangular matching assigns the smaller side without dropping sample identity."""
     first, second = matching_pair
     outcome = HungarianMatcher().forward(second, first)
     assert isinstance(outcome, Ok)
     assert outcome.value.pred_indices.numel() == 2
 
 
-def test_all_empty_and_zero_images(device: torch.device) -> None:
-    """Completely empty input supports both zero and multiple images."""
-    for images in (0, 3):
+def test_all_empty_and_zero_samples(device: torch.device) -> None:
+    """Completely empty input supports both zero and multiple samples."""
+    for samples in (0, 3):
         outcome = pack_boxes(
-            [torch.empty((0, 6), device=device)] * images,
+            [torch.empty((0, 6), device=device)] * samples,
             device=device,
             dtype=torch.float32,
         )
@@ -123,11 +123,11 @@ def test_all_empty_and_zero_images(device: torch.device) -> None:
         result = HungarianMatcher().forward(outcome.value, outcome.value)
         assert isinstance(result, Ok)
         assert result.value.pred_indices.numel() == 0
-        assert result.value.cu_seqlens.shape == (images + 1,)
+        assert result.value.cu_seqlens.shape == (samples + 1,)
 
 
-def test_image_isolation(device: torch.device) -> None:
-    """Never select a geometrically closer box from another image."""
+def test_sample_isolation(device: torch.device) -> None:
+    """Never select a geometrically closer box from another sample."""
     preds = torch.tensor(
         [[0, 0, 2, 1, 1, 0], [10, 0, 2, 1, 1, 0]], device=device, dtype=torch.float64
     )

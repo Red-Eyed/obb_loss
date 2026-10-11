@@ -19,7 +19,7 @@ dispatch. Use NamedTuple tensor records, jaxtyping shape annotations, einops rea
 and Pydantic configs outside tensor execution. Document every module, class, and function.
 Library tensors are borrowed and never mutated. Expected public failures return typed errors.
 
-Pack at integration boundaries; preserve empty images and autograd. Geometry is six
+Pack at integration boundaries; preserve empty samples and autograd. Geometry is six
 coordinates `(cx, cy, w, h, cos(theta), sin(theta))`. Float64-required criteria disable
 autocast locally and convert internally. Cite primary papers and document numerical departures.
 

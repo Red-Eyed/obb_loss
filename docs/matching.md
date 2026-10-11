@@ -1,7 +1,7 @@
 # Standalone packed assignment
 
 `HungarianMatcher.forward(preds: PackedBoxes, targets: PackedBoxes)` constructs
-per-image ProbIoU costs and returns `Ok(Assignment)` or `Err(InputError)`.
+per-sample ProbIoU costs and returns `Ok(Assignment)` or `Err(InputError)`.
 A custom unreduced aligned cost function can replace the built-in geometry cost.
 The matcher does not impose classification labels, quality targets, or decoder layers.
 
@@ -12,11 +12,11 @@ than Kuhn's algorithm: David F. Crouse, *On implementing 2D rectangular assignme
 algorithms* (2016), [DOI:10.1109/TAES.2016.140952](https://doi.org/10.1109/TAES.2016.140952).
 See [SciPy's solver contract](https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.linear_sum_assignment.html).
 
-Each image gets min(predictions, targets) unique pairs. Unmatched boxes stay in caller
-records. Empty images produce repeated assignment offsets. Gather matched boxes with
+Each sample gets min(predictions, targets) unique pairs. Unmatched boxes stay in caller
+records. Empty samples produce repeated assignment offsets. Gather matched boxes with
 `gather_matched`, then invoke a box criterion; gather preserves gradients.
 
-Costs use row-major rectangular blocks, never cross-image pairs. Construction bounds
+Costs use row-major rectangular blocks, never cross-sample pairs. Construction bounds
 temporary pair geometry with `chunk_size`; full costs require sum(n_i*m_i) float64
 elements, bounded by `max_pairs`. Defaults are 65536 temporary pairs and 10000000 total
 pairs (80 MB cost storage). SciPy may allocate additional working storage. Metadata

@@ -16,9 +16,9 @@ def pack_boxes(
     device: torch.device,
     dtype: torch.dtype,
 ) -> Result[PackedBoxes, InputError]:
-    """Concatenate per-image `[n_i, 6]` tensors, preserving gradients and empty images.
+    """Concatenate per-sample `[n_i, 6]` tensors, preserving gradients and empty samples.
 
-    Device/dtype are explicit so even zero-image input has a defined representation.
+    Device/dtype are explicit so even zero-sample input has a defined representation.
     No input is moved, detached, or mutated. Concatenation allocates packed storage.
     """
     counts = [0]
@@ -42,7 +42,7 @@ def pack_boxes(
 
 
 def pack_dense_boxes(boxes: Tensor) -> Result[PackedBoxes, InputError]:
-    """Flatten `[b, q, 6]` DETR geometry, retaining autograd and regular image offsets.
+    """Flatten `[b, q, 6]` DETR geometry, retaining autograd and regular sample offsets.
 
     Rearrangement borrows a view where strides allow it and otherwise copies. This
     adapter validates geometry; it does not match predictions or orchestrate layers.

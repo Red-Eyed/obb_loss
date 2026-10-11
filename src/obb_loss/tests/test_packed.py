@@ -6,7 +6,7 @@ from einops import rearrange
 from torch import Tensor
 
 from obb_loss.adapters import boxes_from_angles, pack_boxes, pack_dense_boxes
-from obb_loss.packed import image_indices, make_packed_boxes
+from obb_loss.packed import make_packed_boxes, sample_indices
 from obb_loss.result import Err, Ok
 
 
@@ -20,15 +20,15 @@ def boxes() -> Tensor:
     )
 
 
-def test_list_empty_image_order_and_gradients(boxes: Tensor) -> None:
-    """Retain an empty middle image while gradients flow to original storage."""
+def test_list_empty_sample_order_and_gradients(boxes: Tensor) -> None:
+    """Retain an empty middle sample while gradients flow to original storage."""
     outcome = pack_boxes(
         [boxes[:1], boxes[:0], boxes[1:]], device=boxes.device, dtype=boxes.dtype
     )
     assert isinstance(outcome, Ok)
     packed = outcome.value
     torch.testing.assert_close(packed.cu_seqlens, torch.tensor([0, 1, 1, 2]))
-    torch.testing.assert_close(image_indices(packed), torch.tensor([0, 2]))
+    torch.testing.assert_close(sample_indices(packed), torch.tensor([0, 2]))
     packed.boxes.sum().backward()
     torch.testing.assert_close(boxes.grad, torch.ones_like(boxes))
 
@@ -55,16 +55,16 @@ def test_dense_adapter_matches_direct_record(boxes: Tensor) -> None:
     torch.testing.assert_close(outcome.value.cu_seqlens, torch.tensor([0, 1, 2]))
 
 
-@pytest.mark.parametrize("images", [0, 3])
-def test_completely_empty(images: int) -> None:
-    """Distinguish zero images from multiple empty images with explicit metadata."""
+@pytest.mark.parametrize("samples", [0, 3])
+def test_completely_empty(samples: int) -> None:
+    """Distinguish zero samples from multiple empty samples with explicit metadata."""
     outcome = pack_boxes(
-        [torch.empty(0, 6)] * images, device=torch.device("cpu"), dtype=torch.float32
+        [torch.empty(0, 6)] * samples, device=torch.device("cpu"), dtype=torch.float32
     )
     assert isinstance(outcome, Ok)
     assert outcome.value.boxes.shape == (0, 6)
-    assert outcome.value.cu_seqlens.shape == (images + 1,)
-    assert image_indices(outcome.value).numel() == 0
+    assert outcome.value.cu_seqlens.shape == (samples + 1,)
+    assert sample_indices(outcome.value).numel() == 0
 
 
 def test_angles_are_explicit_and_differentiable() -> None:

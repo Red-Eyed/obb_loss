@@ -13,7 +13,7 @@ Tests compare ProbIoU to independent matrix-solve/log-determinant Gaussian equat
 well-conditioned inputs, plus analytic center-shift/thin-box values and gradients where
 matrix conditioning is unsuitable. VFL/QFL use scalar paper equations and gradcheck.
 Matcher optimality is verified against exhaustive rectangular assignments, with empty
-segments, image isolation, uniqueness, bounded callback chunks, and gradient-preserving
+segments, sample isolation, uniqueness, bounded callback chunks, and gradient-preserving
 gather. Strict checker negative fixtures verify Result narrowing and callback signatures.
 
 ## Seeded CPU stress study
@@ -44,7 +44,7 @@ The simulation supplies domain-scoped evidence rather than a proof for all possi
 
 ## Small CPU benchmark
 
-Two images, 32 predictions and 8 targets per image, float64 inputs, chunk_size 65536,
+Two samples, 32 predictions and 8 targets per sample, float64 inputs, chunk_size 65536,
 two measured repeats after warmup. Complete cost storage: 4096 bytes.
 
 | Stage | Mean wall time |

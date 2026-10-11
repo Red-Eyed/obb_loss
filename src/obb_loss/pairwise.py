@@ -1,4 +1,4 @@
-"""Chunked per-image rectangular cost blocks without cross-image pairs."""
+"""Chunked per-sample rectangular cost blocks without cross-sample pairs."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 
 
 class CostBlock(NamedTuple):
-    """Metadata for one image's row-major rectangular block in packed costs."""
+    """Metadata for one sample's row-major rectangular block in packed costs."""
 
     pred_start: int
     target_start: int
@@ -28,7 +28,7 @@ class CostBlock(NamedTuple):
 
 
 class PackedCosts(NamedTuple):
-    """Float64 row-major costs and ordered per-image rectangular metadata."""
+    """Float64 row-major costs and ordered per-sample rectangular metadata."""
 
     values: Tensor
     blocks: tuple[CostBlock, ...]
@@ -64,15 +64,15 @@ def _blocks(
         or preds.boxes.device != targets.boxes.device
     ):
         return Err(
-            InputError(ErrorKind.ALIGNMENT, "batch", "image count/device must match")
+            InputError(ErrorKind.ALIGNMENT, "batch", "sample count/device must match")
         )
     pred_cu = preds.cu_seqlens.detach().cpu()
     target_cu = targets.cu_seqlens.detach().cpu()
     blocks: list[CostBlock] = []
     start = 0
-    for image in range(pred_cu.shape[0] - 1):
-        p, t = int(pred_cu[image]), int(target_cu[image])
-        rows, columns = int(pred_cu[image + 1]) - p, int(target_cu[image + 1]) - t
+    for sample in range(pred_cu.shape[0] - 1):
+        p, t = int(pred_cu[sample]), int(target_cu[sample])
+        rows, columns = int(pred_cu[sample + 1]) - p, int(target_cu[sample + 1]) - t
         end = start + rows * columns
         if end > limit:
             return Err(

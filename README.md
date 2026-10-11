@@ -14,7 +14,7 @@ and targets. Use `boxes_from_angles` to convert radians; no format inference occ
 import torch
 from obb_loss import Ok, Err, pack_boxes, pack_dense_boxes
 
-# Existing per-image target tensors, including an empty image.
+# Existing per-sample target tensors, including an empty sample.
 targets_result = pack_boxes(
     [torch.tensor([[0., 0., 2., 1., 1., 0.]]), torch.empty(0, 6)],
     device=torch.device("cpu"),
@@ -26,10 +26,10 @@ predictions = torch.tensor([[[0.1, 0., 2., 1., 1., 0.]],
 preds_result = pack_dense_boxes(predictions)
 ```
 
-Helpers preserve gradients and image boundaries, never mutate or silently transfer inputs,
+Helpers preserve gradients and sample boundaries, never mutate or silently transfer inputs,
 and return `Ok(PackedBoxes)` or `Err(InputError)`. Device and dtype remain explicit even
-for zero-image input. `PackedBoxes.boxes` is `[total_boxes, 6]`; `cu_seqlens` is integer
-`[batch + 1]`, starts at zero, ends at total_boxes, and retains empty images through repeats.
+for zero-sample input. `PackedBoxes.boxes` is `[total_boxes, 6]`; `cu_seqlens` is integer
+`[batch + 1]`, starts at zero, ends at total_boxes, and retains empty samples through repeats.
 
 ## Match, then evaluate an aligned box loss
 
@@ -57,12 +57,12 @@ Box criterion signature: `forward(preds: PackedBoxes, targets: PackedBoxes) -> T
 and returns a typed result. Pure `stable_probiou_loss` returns unreduced values and
 `stable_probiou` returns similarity. Outputs are float64; autocast is disabled locally
 without changing your detector's outer mixed-precision context. Empty mean/sum is a
-gradient-connected zero. Mean averages matched pairs across the whole pack, not per-image means.
+gradient-connected zero. Mean averages matched pairs across the whole pack, not per-sample means.
 
-The matcher solves each image independently, assigns the smaller side fully, and returns
+The matcher solves each sample independently, assigns the smaller side fully, and returns
 detached indices on the input device. Its CPU solver makes an explicit cost transfer from
 CUDA. Cost construction is chunked; complete cost storage remains quadratic within each
-image. See [matching contracts](docs/matching.md) for limits and solver references.
+sample. See [matching contracts](docs/matching.md) for limits and solver references.
 
 ## Quality classification
 
@@ -121,7 +121,7 @@ metadata supports Python 3.11+. Tool settings live separately in `ruff.toml`,
 
 ```text
 just stress --samples 10000 --chunk-size 512 --dtype FP64
-just benchmark --images 4 --queries 128 --targets 32
+just benchmark --samples 4 --queries 128 --targets 32
 just test-cuda
 just build
 ```

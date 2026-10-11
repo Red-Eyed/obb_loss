@@ -27,7 +27,7 @@ _DEFAULT_CONFIG = MatcherConfig()
 
 
 class Assignment(NamedTuple):
-    """Global paired indices and image offsets, including empty assignments."""
+    """Global paired indices and sample offsets, including empty assignments."""
 
     pred_indices: Tensor
     target_indices: Tensor
@@ -35,7 +35,7 @@ class Assignment(NamedTuple):
 
 
 class HungarianMatcher(nn.Module):
-    """Minimize per-image cost without detector classification/layer orchestration."""
+    """Minimize per-sample cost without detector classification/layer orchestration."""
 
     def __init__(
         self,
@@ -51,7 +51,7 @@ class HungarianMatcher(nn.Module):
     def forward(
         self, preds: PackedBoxes, targets: PackedBoxes
     ) -> Result[Assignment, InputError]:
-        """Return checked detached indices; smaller side is fully assigned per image.
+        """Return checked detached indices; smaller side is fully assigned per sample.
 
         CPU solver receives one explicit detached cost transfer. Output indices
         live on the input device. Matching is nondifferentiable, calls no loss
@@ -71,7 +71,7 @@ def gather_matched(
     """Gather matched geometry with gradients using trusted same-batch assignment.
 
     Assignment must come from these input records; indices are borrowed. Gather
-    allocates output geometry and preserves per-image boundaries, including empties.
+    allocates output geometry and preserves per-sample boundaries, including empties.
     """
     return PackedBoxes(
         preds.boxes[assignment.pred_indices], assignment.cu_seqlens
