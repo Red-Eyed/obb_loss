@@ -29,7 +29,14 @@ class Reduction(Enum):
 
 
 class LossConfig(BaseModel):
-    """Shared immutable scalar weighting and reduction settings."""
+    """Configure loss reduction and weighting.
+
+    Attributes:
+        reduction: NONE retains elements; SUM adds them; MEAN averages elements,
+            with empty scalar reductions returning zero.
+        weight: Finite nonnegative multiplier applied after reduction; zero skips
+            loss evaluation.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
     reduction: Reduction = Reduction.MEAN
@@ -37,13 +44,27 @@ class LossConfig(BaseModel):
 
 
 class ProbIoUConfig(LossConfig):
-    """Stable float64 ProbIoU; numerical domain is fixed, not an epsilon knob."""
+    """Configure the stable ProbIoU loss.
+
+    Attributes:
+        kind: Serialization discriminator selecting stable ProbIoU. Inherits
+            reduction and global weight from LossConfig.
+    """
 
     kind: Literal["probiou"] = "probiou"
 
 
 class VFLConfig(LossConfig):
-    """Varifocal weighting for caller-supplied quality labels."""
+    """Configure Varifocal modulation.
+
+    Attributes:
+        kind: Serialization discriminator selecting Varifocal loss.
+        alpha: Finite nonnegative multiplier for negative-class weights.
+        gamma: Finite nonnegative probability exponent controlling suppression of
+            easy negatives.
+        quality_weighted: Use target quality as positive-class BCE weight; false
+            uses one. Reduction/global weight are inherited.
+    """
 
     kind: Literal["vfl"] = "vfl"
     alpha: Nonnegative = 0.75
@@ -52,14 +73,28 @@ class VFLConfig(LossConfig):
 
 
 class QFLConfig(LossConfig):
-    """Quality focal modulation for caller-supplied quality labels."""
+    """Configure Quality Focal modulation.
+
+    Attributes:
+        kind: Serialization discriminator selecting Quality Focal loss.
+        beta: Finite exponent >=1 on absolute quality error; controls suppression of
+            predictions close to target quality. Reduction/global weight are
+            inherited.
+    """
 
     kind: Literal["qfl"] = "qfl"
     beta: Annotated[float, Field(ge=1, allow_inf_nan=False)] = 2.0
 
 
 class MatcherConfig(BaseModel):
-    """Bound temporary geometry and complete assignment cost storage independently."""
+    """Configure packed matching memory limits.
+
+    Attributes:
+        chunk_size: Positive maximum number of aligned pairs evaluated together;
+            bounds temporary pair storage.
+        max_pairs: Maximum sum of per-sample rectangular pair counts; bounds
+            complete cost storage.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
     chunk_size: Positive = 65536
@@ -67,7 +102,15 @@ class MatcherConfig(BaseModel):
 
 
 class SetWeights(BaseModel):
-    """Independent nonnegative weights for classification, L1, and ProbIoU."""
+    """Configure independent component multipliers.
+
+    Attributes:
+        classification: Nonnegative multiplier for classification cost or loss,
+            according to its owning config.
+        l1: Nonnegative multiplier for center/side L1 cost or loss.
+        probiou: Nonnegative multiplier for ProbIoU cost or loss. Zero disables the
+            corresponding computation.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
     classification: Nonnegative = 1.0
@@ -76,7 +119,13 @@ class SetWeights(BaseModel):
 
 
 class SetMatcherConfig(BaseModel):
-    """Matching weights and storage bounds, independent of training losses."""
+    """Configure set assignment.
+
+    Attributes:
+        weights: Class/L1/ProbIoU assignment weights, independent of training
+            weights; at least one must be positive.
+        storage: Temporary chunk-size and complete-pair storage limits.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
     weights: SetWeights = SetWeights()
@@ -91,7 +140,15 @@ class SetMatcherConfig(BaseModel):
 
 
 class SetCriterionConfig(BaseModel):
-    """Per-layer losses and matcher configuration with caller-supplied quality."""
+    """Configure one layer of set supervision.
+
+    Attributes:
+        weights: Class/L1/ProbIoU training multipliers; all-zero loss weights are
+            allowed.
+        matcher: Independent assignment weights and cost-storage limits.
+        classification: VFL/QFL formulation settings; weight/reduction must retain
+            defaults because the set criterion owns both operations.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
     weights: SetWeights = SetWeights()
@@ -114,7 +171,18 @@ class SetCriterionConfig(BaseModel):
 
 
 def parse_config(model: type[C], raw: JsonValue) -> Result[C, InputError]:
-    """Validate JSON-compatible settings, returning typed validation failures."""
+    """Validate external configuration into a typed model.
+
+    Args:
+        model: Pydantic configuration class selecting the schema and loss/matcher
+            variant.
+        raw: JSON-compatible configuration data to validate, usually a mapping of
+            field names to values.
+
+    Returns:
+        Ok(validated model) or Err(InputError) containing Pydantic validation
+        diagnostics.
+    """
     try:
         return Ok(model.model_validate(raw))
     except ValidationError as error:

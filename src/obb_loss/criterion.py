@@ -16,7 +16,18 @@ _DEFAULT_CONFIG = ProbIoUConfig()
 def validate_alignment(
     preds: PackedBoxes, targets: PackedBoxes
 ) -> Result[tuple[PackedBoxes, PackedBoxes], InputError]:
-    """Validate fresh records, then require one aligned target per prediction."""
+    """Validate already matched packed geometry.
+
+    Args:
+        preds: Predicted packed geometry; sample boundaries and box order must match
+            targets.
+        targets: Already matched reference geometry in the same units, with the same
+            cumulative offsets as preds.
+
+    Returns:
+        Ok(the borrowed records) or Err(InputError) for invalid geometry, mismatched
+        sample offsets, devices, or pair-dependent ProbIoU domain.
+    """
     for packed in (preds, targets):
         match make_packed_boxes(*packed):
             case Err() as failure:
@@ -42,17 +53,30 @@ class ProbIoULoss(nn.Module):
     """Stable loss on already matched packed boxes; no assignment or layer loop."""
 
     def __init__(self, config: ProbIoUConfig = _DEFAULT_CONFIG) -> None:
-        """Store immutable settings; use checked for recoverable input validation."""
+        """Configure the aligned ProbIoU box loss.
+
+        Args:
+            config: Validated immutable output reduction and global weight. NONE retains
+                matched pairs; MEAN averages pairs across the whole pack.
+        """
         super().__init__()
         self.config = config
 
     @override
     def forward(self, preds: PackedBoxes, targets: PackedBoxes) -> Tensor:
-        """Compute trusted aligned float64 loss with caller-owned valid geometry.
+        """Evaluate ProbIoU on trusted, already matched packed boxes.
 
-        Records must have identical offsets and satisfy the pure function's domain.
-        Inputs are borrowed; mean/sum of empty pairs is a differentiable zero.
-        Use checked for typed failures; forward avoids synchronizing value checks.
+        Inputs must satisfy the ProbIoU numerical domain. A zero weight skips the loss computation. Use checked for typed input failures; this path omits synchronizing value validation.
+
+        Args:
+            preds: Predicted packed geometry; sample boundaries and box order must match
+                targets.
+            targets: Already matched reference geometry in the same units, with the same
+                cumulative offsets as preds.
+
+        Returns:
+            Float64 [pairs] values for NONE, or a weighted scalar for SUM/MEAN; empty
+            scalar reductions are connected zeros.
         """
         if self.config.weight == 0:
             values = preds.boxes[:, 0].double() * 0 + targets.boxes[:, 0].double() * 0
@@ -63,7 +87,18 @@ class ProbIoULoss(nn.Module):
     def checked(
         self, preds: PackedBoxes, targets: PackedBoxes
     ) -> Result[Tensor, InputError]:
-        """Validate current tensors/layout/domain before invoking trusted forward."""
+        """Validate aligned packed boxes before evaluating ProbIoU.
+
+        Args:
+            preds: Predicted packed geometry; sample boundaries and box order must match
+                targets.
+            targets: Already matched reference geometry in the same units, with the same
+                cumulative offsets as preds.
+
+        Returns:
+            Ok(loss) using the configured reduction/weight, or Err(InputError) for
+            invalid geometry, offsets, alignment, device, or ProbIoU domain.
+        """
         match validate_alignment(preds, targets):
             case Err() as failure:
                 return failure

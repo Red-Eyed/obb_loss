@@ -30,13 +30,24 @@ def varifocal_loss(
     gamma: float = 2.0,
     quality_weighted: bool = True,
 ) -> Float[Tensor, "n c"]:  # noqa: F722
-    """Return trusted unreduced float64 VFL with explicit caller-supplied quality.
+    """Compute unreduced Varifocal loss with supplied quality targets.
 
-    Equal shapes, finite logits, quality in [0,1], same CPU/CUDA device, and finite
-    nonnegative alpha/gamma are required. No mutation/detach; target gradients flow.
-    Positive BCE weight is quality (or one); negatives use alpha*p**gamma. The
-    logsigmoid/exponential form avoids fractional-power NaNs at underflowed p=0.
-    Autocast is disabled locally. See docs/losses.md for attribution and reduction.
+    Inputs must share a CPU/CUDA device and be finite. Autocast is disabled locally. The logsigmoid form keeps fractional negative modulation finite at probability underflow.
+
+    Args:
+        logits: Floating [queries, classes] scores before sigmoid; no background
+            column.
+        quality: Floating [queries, classes] quality in [0, 1], aligned with logits;
+            zero marks a negative class. Target gradients are preserved.
+        alpha: Finite nonnegative multiplier for negative-class BCE weights.
+        gamma: Finite nonnegative exponent on predicted probability for negative
+            classes; larger values suppress easy negatives.
+        quality_weighted: Whether positive-class BCE is weighted by its quality
+            target; false uses unit positive weight.
+
+    Returns:
+        Float64 [queries, classes] losses, without reduction or a global loss
+        weight.
     """
     with torch.autocast(logits.device.type, enabled=False):
         scores, targets = logits.double(), quality.double()
@@ -53,13 +64,31 @@ class VarifocalLoss(nn.Module):
     """Configured VFL without detector assignment or layer orchestration."""
 
     def __init__(self, config: VFLConfig = _DEFAULT_CONFIG) -> None:
-        """Store immutable modulation/reduction settings outside forward."""
+        """Configure the classification loss.
+
+        Args:
+            config: Validated immutable settings selecting VFL alpha, gamma, positive-
+                quality weighting, output reduction, and global weight.
+        """
         super().__init__()
         self.config = config
 
     @override
     def forward(self, logits: Tensor, quality: Tensor) -> Tensor:
-        """Evaluate trusted caller-provided quality; empty reductions are zero."""
+        """Evaluate classification loss on trusted quality targets.
+
+        Inputs must share a CPU/CUDA device and satisfy the pure function domain. A zero configured weight skips the loss computation. Use checked for recoverable validation failures.
+
+        Args:
+            logits: Floating [queries, classes] scores before sigmoid; no background
+                column.
+            quality: Floating [queries, classes] quality in [0, 1], aligned with logits;
+                zero marks a negative class. Target gradients are preserved.
+
+        Returns:
+            Weighted float64 [queries, classes] values for NONE, or a scalar for
+            SUM/MEAN; empty scalar reductions are connected zeros.
+        """
         if self.config.weight == 0:
             return reduce_loss(
                 logits.double() * 0 + quality.double() * 0, self.config.reduction
@@ -74,7 +103,20 @@ class VarifocalLoss(nn.Module):
         return reduce_loss(values, self.config.reduction) * self.config.weight
 
     def checked(self, logits: Tensor, quality: Tensor) -> Result[Tensor, InputError]:
-        """Admit current logits and quality before trusted forward execution."""
+        """Validate logits and supplied quality before evaluating classification loss.
+
+        Validation checks current tensor contents and synchronizes accelerators.
+
+        Args:
+            logits: Floating [queries, classes] scores before sigmoid; no background
+                column.
+            quality: Floating [queries, classes] quality in [0, 1], aligned with logits;
+                zero marks a negative class. Target gradients are preserved.
+
+        Returns:
+            Ok(loss) using configured weighting/reduction, or Err(InputError) for shape,
+            dtype, device, finiteness, or quality-range violations.
+        """
         match validate_quality(logits, quality):
             case Err() as failure:
                 return failure

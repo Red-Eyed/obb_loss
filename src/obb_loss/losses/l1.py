@@ -15,11 +15,20 @@ def box_l1_loss(
     preds: Float[Tensor, "n 6"],  # noqa: F722
     targets: Float[Tensor, "n 6"],  # noqa: F722
 ) -> Float[Tensor, "n"]:  # noqa: F821, UP037
-    """Sum absolute center/side errors per pair in float64, excluding direction.
+    """Compute center and side L1 error for each matched box pair.
 
-    Inputs must be aligned six-coordinate boxes on one CPU/CUDA device, using
-    the same coordinate units. Orientation is supervised by a separate overlap loss.
-    Autocast is disabled locally; gradients remain connected to both inputs.
+    Direction coordinates are excluded. Inputs are trusted; autocast is disabled locally and gradients flow to both tensors.
+
+    Args:
+        preds: Predicted aligned boxes in (cx, cy, width, height, cos(theta),
+            sin(theta)) order; positive sides and nonzero directions, in shared
+            coordinate units. Shape [pairs, 6].
+        targets: Reference boxes in the same order and units as preds, paired
+            elementwise with predictions. Same [pairs, 6] shape and CPU/CUDA device.
+
+    Returns:
+        Float64 [pairs] sums of absolute errors in cx, cy, width, and height,
+        measured in the supplied coordinate units.
     """
     with torch.autocast(preds.device.type, enabled=False):
         return (preds[:, :4].double() - targets[:, :4].double()).abs().sum(dim=-1)

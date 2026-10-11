@@ -28,12 +28,21 @@ def quality_focal_loss(
     *,
     beta: float = 2.0,
 ) -> Float[Tensor, "n c"]:  # noqa: F722
-    """Return trusted unreduced float64 BCE*abs(quality-sigmoid(logits))**beta.
+    """Compute unreduced Quality Focal loss with supplied quality targets.
 
-    Same quality domain as VFL; beta must be finite and >=1 to avoid singular
-    modulation gradients at equality. beta=1 chooses abs's zero subgradient.
-    Inputs/targets remain connected to autograd. Autocast is disabled locally;
-    low-precision leaf gradient casts can still overflow. See docs/losses.md.
+    Inputs must share a CPU/CUDA device and be finite. Autocast is disabled locally; target gradients remain connected. beta >=1 avoids singular gradients at equal quality.
+
+    Args:
+        logits: Floating [queries, classes] scores before sigmoid; no background
+            column.
+        quality: Floating [queries, classes] quality in [0, 1], aligned with logits;
+            zero marks a negative class. Target gradients are preserved.
+        beta: Finite exponent >=1 on abs(quality - sigmoid(logits)); larger values
+            suppress predictions close to target quality.
+
+    Returns:
+        Float64 [queries, classes] BCE losses multiplied by the quality-error
+        modulation.
     """
     with torch.autocast(logits.device.type, enabled=False):
         scores, targets = logits.double(), quality.double()
@@ -48,13 +57,31 @@ class QualityFocalLoss(nn.Module):
     """Configured QFL for explicit quality targets."""
 
     def __init__(self, config: QFLConfig = _DEFAULT_CONFIG) -> None:
-        """Store immutable beta, weighting, and reduction settings."""
+        """Configure the classification loss.
+
+        Args:
+            config: Validated immutable settings selecting QFL beta, output reduction,
+                and global weight.
+        """
         super().__init__()
         self.config = config
 
     @override
     def forward(self, logits: Tensor, quality: Tensor) -> Tensor:
-        """Evaluate trusted QFL with caller-owned target and normalization policy."""
+        """Evaluate classification loss on trusted quality targets.
+
+        Inputs must share a CPU/CUDA device and satisfy the pure function domain. A zero configured weight skips the loss computation. Use checked for recoverable validation failures.
+
+        Args:
+            logits: Floating [queries, classes] scores before sigmoid; no background
+                column.
+            quality: Floating [queries, classes] quality in [0, 1], aligned with logits;
+                zero marks a negative class. Target gradients are preserved.
+
+        Returns:
+            Weighted float64 [queries, classes] values for NONE, or a scalar for
+            SUM/MEAN; empty scalar reductions are connected zeros.
+        """
         if self.config.weight == 0:
             return reduce_loss(
                 logits.double() * 0 + quality.double() * 0, self.config.reduction
@@ -63,7 +90,20 @@ class QualityFocalLoss(nn.Module):
         return reduce_loss(values, self.config.reduction) * self.config.weight
 
     def checked(self, logits: Tensor, quality: Tensor) -> Result[Tensor, InputError]:
-        """Validate current quality inputs and return a recoverable rejection."""
+        """Validate logits and supplied quality before evaluating classification loss.
+
+        Validation checks current tensor contents and synchronizes accelerators.
+
+        Args:
+            logits: Floating [queries, classes] scores before sigmoid; no background
+                column.
+            quality: Floating [queries, classes] quality in [0, 1], aligned with logits;
+                zero marks a negative class. Target gradients are preserved.
+
+        Returns:
+            Ok(loss) using configured weighting/reduction, or Err(InputError) for shape,
+            dtype, device, finiteness, or quality-range violations.
+        """
         match validate_quality(logits, quality):
             case Err() as failure:
                 return failure

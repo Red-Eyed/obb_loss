@@ -21,11 +21,17 @@ if TYPE_CHECKING:
 
 
 def solve_costs(costs: PackedCosts) -> Result[Assignment, InputError]:
-    """Minimize finite row-major blocks; transfer complete costs to CPU exactly once.
+    """Solve each packed sample rectangle on the CPU.
 
-    Imported solver responses are checked for integer vectors before entering the
-    typed core. Unexpected vendor failures propagate; ValueError is recoverable.
-    Solver has its own working storage beyond the input cost buffer.
+    Costs transfer once to CPU. SciPy allocates its own working storage; unexpected vendor failures propagate.
+
+    Args:
+        costs: Finite row-major cost values and ordered rectangular metadata; source
+            offsets identify global prediction/reference rows.
+
+    Returns:
+        Ok(Assignment) with global int64 indices on the cost device, or
+        Err(InputError) for recoverable solver/input response failures.
     """
     from obb_loss.matching import Assignment
 

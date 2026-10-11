@@ -41,19 +41,49 @@ class BoxTerm(nn.Module):
     """Adapt one unreduced function; assignment of modules registers their state."""
 
     def __init__(self, spec: TermSpec) -> None:
-        """Register module components instead of hiding them in a closure."""
+        """Register one weighted custom box term.
+
+        Args:
+            spec: Term name, aligned function/module, and finite nonnegative multiplier;
+                module state is registered as a child.
+        """
         super().__init__()
         self.function = spec.function
         self.weight = spec.weight
 
     def evaluate(self, preds: Tensor, targets: Tensor) -> Tensor:
-        """Call the component with the builder's tensor input/output contract."""
+        """Call the configured unreduced box term.
+
+        Args:
+            preds: Predicted aligned boxes in (cx, cy, width, height, cos(theta),
+                sin(theta)) order; positive sides and nonzero directions, in shared
+                coordinate units. Float64 [pairs, 6] geometry.
+            targets: Reference boxes in the same order and units as preds, paired
+                elementwise with predictions. Float64 [pairs, 6] geometry.
+
+        Returns:
+            The callback tensor before weighting or reduction; custom callback failures
+            propagate.
+        """
         # nn.Module.__call__ lacks the signature required by custom box terms.
         return cast("BoxFunction", self.function)(preds, targets)
 
     @override
     def forward(self, preds: Tensor, targets: Tensor) -> Tensor:
-        """Invoke a trusted component whose contract guarantees a tensor result."""
+        """Evaluate and weight a trusted box term.
+
+        A callback returning a non-tensor violates the trusted contract and raises TypeError.
+
+        Args:
+            preds: Predicted aligned boxes in (cx, cy, width, height, cos(theta),
+                sin(theta)) order; positive sides and nonzero directions, in shared
+                coordinate units. Float64 [pairs, 6] geometry.
+            targets: Reference boxes in the same order and units as preds, paired
+                elementwise with predictions. Float64 [pairs, 6] geometry.
+
+        Returns:
+            Unreduced callback values multiplied by the configured term weight.
+        """
         match self.evaluate(preds, targets):
             case Tensor() as values:
                 return values * self.weight
@@ -67,7 +97,14 @@ class CompositeBoxLoss(nn.Module):
     """Weighted custom terms with one reduction and the packed box forward contract."""
 
     def __init__(self, specs: tuple[TermSpec, ...], config: LossConfig) -> None:
-        """Freeze the component graph and register every enabled child module."""
+        """Register enabled terms and configure their shared reduction.
+
+        Args:
+            specs: Validated uniquely named loss functions/modules with finite
+                nonnegative term weights; modules register their parameters and buffers.
+            config: Final reduction over matched pairs and global multiplier applied
+                after combining weighted terms.
+        """
         super().__init__()
         self.config = config
         self.terms = tuple(BoxTerm(spec) for spec in specs)
@@ -76,11 +113,19 @@ class CompositeBoxLoss(nn.Module):
 
     @override
     def forward(self, preds: PackedBoxes, targets: PackedBoxes) -> Tensor:
-        """Evaluate trusted aligned terms in float64 with autocast locally disabled.
+        """Evaluate custom loss terms on aligned packed box pairs.
 
-        User functions receive float64 aligned geometry and return `[n]` values.
-        Reduction/weighting happen once; caller owns valid input/output contracts.
-        Layer iteration and normalization beyond the configured reduction are external.
+        Callbacks receive float64 [pairs, 6] tensors and return unreduced [pairs] losses. Inputs and callback contracts are trusted. Autocast is disabled locally. Custom code bugs propagate.
+
+        Args:
+            preds: Predicted packed geometry; sample boundaries and box order must match
+                targets.
+            targets: Already matched reference geometry in the same units, with the same
+                cumulative offsets as preds.
+
+        Returns:
+            Float64 [pairs] values for NONE, or a weighted scalar for SUM/MEAN; empty
+            scalar reductions are connected zeros.
         """
         with torch.autocast(preds.boxes.device.type, enabled=False):
             first, second = preds.boxes.double(), targets.boxes.double()
@@ -92,7 +137,20 @@ class CompositeBoxLoss(nn.Module):
     def checked(
         self, preds: PackedBoxes, targets: PackedBoxes
     ) -> Result[Tensor, InputError]:
-        """Validate current aligned inputs and observable callback output contracts."""
+        """Evaluate custom loss terms on aligned packed box pairs.
+
+        Callbacks receive float64 [pairs, 6] tensors and return unreduced [pairs] losses. Fresh inputs and callback shape/device/finiteness are validated. Autocast is disabled locally. Custom code bugs propagate.
+
+        Args:
+            preds: Predicted packed geometry; sample boundaries and box order must match
+                targets.
+            targets: Already matched reference geometry in the same units, with the same
+                cumulative offsets as preds.
+
+        Returns:
+            Ok(weighted/reduced loss) or Err(InputError) for invalid aligned input or
+            observable callback output contracts.
+        """
         match validate_alignment(preds, targets):
             case Err() as failure:
                 return failure
@@ -113,21 +171,47 @@ class CompositeBoxLoss(nn.Module):
 
 
 class BoxLossBuilder(NamedTuple):
-    """Immutable fluent assembly; calling add never modifies an existing builder."""
+    """Describe an immutable sequence of weighted custom loss terms.
+
+    Attributes:
+        terms: Ordered term specifications; add returns a new builder, and build
+            validates names/weights and registers enabled modules.
+    """
 
     terms: tuple[TermSpec, ...] = ()
 
     def add(
         self, name: str, function: BoxFunction | nn.Module, *, weight: float = 1.0
     ) -> BoxLossBuilder:
-        """Describe a named unreduced term; build validates names and weights."""
+        """Describe an additional named loss term without changing this builder.
+
+        Args:
+            name: Unique Python identifier used to register the term and name its module
+                state.
+            function: Aligned box loss callable or module, returning finite [pairs]
+                values from two [pairs, 6] float64 tensors. Module parameters and
+                buffers are registered on build.
+            weight: Finite nonnegative multiplier applied to this term before the shared
+                reduction; zero omits the term entirely.
+
+        Returns:
+            A new builder containing the additional term. Names/weights are validated by
+            build.
+        """
         return BoxLossBuilder((*self.terms, TermSpec(name, function, weight)))
 
     def build(self, config: LossConfig) -> Result[CompositeBoxLoss, InputError]:
-        """Reject duplicate/invalid names or weights and omit zero-weight terms.
+        """Validate and assemble a weighted composite loss.
 
-        Disabled terms create no wrappers and are never invoked. Custom functions
-        cannot be JSON-serialized; callers reconstruct them before loading weights.
+        Disabled terms are not instantiated or invoked. Config serialization cannot reconstruct callbacks; retain or recreate them separately.
+
+        Args:
+            config: Reduction over combined pair losses and final global weight; zero
+                global weight omits every term.
+
+        Returns:
+            Ok(CompositeBoxLoss) or Err(InputError) for duplicate/invalid names or
+            negative/nonfinite term weights.
         """
         names: set[str] = set()
         enabled: list[TermSpec] = []
@@ -151,7 +235,15 @@ class BoxLossBuilder(NamedTuple):
 def build_loss(
     config: ProbIoUConfig | VFLConfig | QFLConfig,
 ) -> ProbIoULoss | VarifocalLoss | QualityFocalLoss:
-    """Build a built-in from already validated settings; no parsing in forward."""
+    """Construct a configured built-in loss module.
+
+    Args:
+        config: Validated ProbIoU, VFL, or QFL settings selecting the formulation,
+            its numerical parameters, reduction, and global weight.
+
+    Returns:
+        The corresponding ProbIoULoss, VarifocalLoss, or QualityFocalLoss module.
+    """
     match config:
         case ProbIoUConfig():
             return ProbIoULoss(config)
@@ -164,5 +256,14 @@ def build_loss(
 
 
 def build_matcher(config: MatcherConfig, cost: BoxFunction) -> HungarianMatcher:
-    """Assemble the standalone matcher with a typed custom cost collaborator."""
+    """Construct a geometry matcher with a custom cost function.
+
+    Args:
+        config: Validated temporary-pair and full-cost storage limits.
+        cost: Aligned [pairs, 6] -> [pairs] finite same-device cost callable; lower
+            costs are preferred.
+
+    Returns:
+        A HungarianMatcher using the supplied limits and cost.
+    """
     return HungarianMatcher(config, cost)

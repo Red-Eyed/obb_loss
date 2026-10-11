@@ -19,14 +19,28 @@ if TYPE_CHECKING:
 
 
 class PackedPredictions(NamedTuple):
-    """Geometry and `[queries, classes]` logits in the same packed sample order."""
+    """Borrow one decoder layer of packed geometry and class logits.
+
+    Attributes:
+        geometry: Packed query boxes and sample offsets.
+        logits: Floating [queries, classes] pre-sigmoid scores, sharing geometry
+            order/device. No background column.
+    """
 
     geometry: PackedBoxes
     logits: Float[Tensor, "n c"]  # noqa: F722
 
 
 class PackedTargets(NamedTuple):
-    """Geometry, class labels, and caller-supplied quality per target box."""
+    """Borrow packed geometry with labeled caller-supplied quality.
+
+    Attributes:
+        geometry: Packed reference boxes and sample offsets.
+        labels: Same-device int64 [targets] zero-based class indices in geometry
+            order.
+        quality: Same-device floating [targets] values in [0,1], assigned to matched
+            classes. Zero is negative in VFL; gradients are preserved.
+    """
 
     geometry: PackedBoxes
     labels: Int[Tensor, "m"]  # noqa: F821, UP037
@@ -34,7 +48,15 @@ class PackedTargets(NamedTuple):
 
 
 class TargetSample(NamedTuple):
-    """One sample's `[count, 6]` boxes, int64 labels, and floating quality `[count]`."""
+    """Represent annotations for one sample before packing.
+
+    Attributes:
+        boxes: Floating [count, 6] reference boxes in (cx, cy, w, h, cos(theta),
+            sin(theta)) order.
+        labels: Same-device int64 [count] zero-based class IDs, aligned with boxes.
+        quality: Same-device floating [count] values in [0,1] supplied by the
+            caller, aligned with boxes.
+    """
 
     boxes: Float[Tensor, "m 6"]  # noqa: F722
     labels: Int[Tensor, "m"]  # noqa: F821, UP037
@@ -44,7 +66,18 @@ class TargetSample(NamedTuple):
 def make_packed_predictions(
     geometry: PackedBoxes, logits: Tensor
 ) -> Result[PackedPredictions, InputError]:
-    """Validate geometry and finite floating logits on the same CPU/CUDA device."""
+    """Validate and borrow one layer of packed box predictions and logits.
+
+    Args:
+        geometry: Valid packed query boxes; offsets define sample ownership.
+        logits: Finite floating [queries, classes] scores before sigmoid, in
+            geometry order and on its device; at least one class and no background
+            column.
+
+    Returns:
+        Ok(PackedPredictions) borrowing both fields, or Err(InputError) for
+        geometry, layout, shape, dtype, device, or nonfinite logits.
+    """
     match make_packed_boxes(*geometry):
         case Err() as failure:
             return failure
@@ -113,7 +146,20 @@ def _validate_target_fields(
 def make_packed_targets(
     geometry: PackedBoxes, labels: Tensor, quality: Tensor
 ) -> Result[PackedTargets, InputError]:
-    """Validate borrowed target geometry, labels, and caller-supplied quality."""
+    """Validate and borrow packed labeled quality targets.
+
+    Args:
+        geometry: Valid packed reference boxes; offsets define sample ownership.
+        labels: Same-device int64 [targets] zero-based class IDs, ordered with
+            geometry; upper bounds are checked against prediction logits during
+            matching.
+        quality: Same-device floating [targets] confidence/quality in [0, 1]
+            supplied by the caller; never synthesized or detached.
+
+    Returns:
+        Ok(PackedTargets) borrowing every field, or Err(InputError) for invalid
+        geometry, layout, label, quality, or device contracts.
+    """
     match make_packed_boxes(*geometry):
         case Err() as failure:
             return failure
@@ -129,7 +175,18 @@ def make_packed_targets(
 def validate_sets(
     preds: PackedPredictions, targets: PackedTargets
 ) -> Result[tuple[PackedPredictions, PackedTargets], InputError]:
-    """Revalidate current records, sample counts, devices, and class label bounds."""
+    """Validate current packed set records against one another.
+
+    Args:
+        preds: Packed geometry and [queries, classes] logits for one decoder layer,
+            sharing box order and device.
+        targets: Packed reference geometry, int64 class labels, and caller-supplied
+            [targets] quality in [0, 1]; labels and quality follow box order.
+
+    Returns:
+        Ok(the borrowed prediction/target pair) or Err(InputError) for invalid
+        fields, sample counts, devices, or out-of-range labels.
+    """
     match make_packed_predictions(*preds):
         case Err() as failure:
             return failure
@@ -160,7 +217,20 @@ def validate_sets(
 def pack_predictions(
     boxes: Tensor, logits: Tensor
 ) -> Result[PackedPredictions, InputError]:
-    """Pack dense `[batch, queries, 6]` geometry and `[batch, queries, classes]` logits."""
+    """Pack dense box and classification decoder outputs together.
+
+    Autograd is preserved. Rearrangement borrows a view when possible and otherwise copies.
+
+    Args:
+        boxes: Floating [batch, queries, 6] geometry in (cx, cy, w, h, cos(theta),
+            sin(theta)) order.
+        logits: Same-device floating [batch, queries, classes] scores before
+            sigmoid; sample/query order must match boxes.
+
+    Returns:
+        Ok(PackedPredictions) with flattened sample/query order, or Err(InputError)
+        for invalid fields.
+    """
     match pack_dense_boxes(boxes):
         case Err() as failure:
             return failure
@@ -176,7 +246,23 @@ def pack_predictions(
 def pack_targets(
     samples: Sequence[TargetSample], *, device: torch.device, dtype: torch.dtype
 ) -> Result[PackedTargets, InputError]:
-    """Concatenate target samples, preserving empty segments and autograd."""
+    """Pack variable-length labeled targets without losing empty samples.
+
+    Concatenation allocates new storage and preserves gradients, including quality gradients.
+
+    Args:
+        samples: TargetSample records in batch order, each holding [count, 6] boxes,
+            int64 [count] labels, and caller-supplied [count] quality in [0, 1].
+        device: Required shared device for all input fields and output storage; no
+            tensor is moved.
+        dtype: Required box dtype; also selects empty quality storage for a zero-
+            sample batch. Nonempty quality tensors retain their floating dtype,
+            promoted on concatenation if needed.
+
+    Returns:
+        Ok(PackedTargets) in sample order or Err(InputError) for invalid
+        box/label/quality/device contracts.
+    """
     match pack_boxes([sample.boxes for sample in samples], device=device, dtype=dtype):
         case Err() as failure:
             return failure

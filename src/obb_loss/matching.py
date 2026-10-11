@@ -27,7 +27,18 @@ _DEFAULT_CONFIG = MatcherConfig()
 
 
 class Assignment(NamedTuple):
-    """Global paired indices and sample offsets, including empty assignments."""
+    """Describe paired global indices and sample boundaries.
+
+    Matcher results are detached. Indices are global within their respective packed records.
+
+    Attributes:
+        pred_indices: Same-device int64 [pairs] indices into the original prediction
+            geometry.
+        target_indices: Same-device int64 [pairs] reference indices paired with
+            pred_indices.
+        cu_seqlens: Int64 [batch + 1] cumulative pair counts; repeated offsets
+            preserve samples with no pairs.
+    """
 
     pred_indices: Tensor
     target_indices: Tensor
@@ -42,7 +53,14 @@ class HungarianMatcher(nn.Module):
         config: MatcherConfig = _DEFAULT_CONFIG,
         cost: BoxFunction = stable_probiou_loss,
     ) -> None:
-        """Store explicit storage limits and an unreduced aligned cost function."""
+        """Configure geometry-only assignment and its cost function.
+
+        Args:
+            config: Validated chunk-size and total-pair storage limits for cost
+                construction.
+            cost: Pure callable accepting two aligned [pairs, 6] tensors and returning
+                finite same-device floating [pairs] costs; smaller values are preferred.
+        """
         super().__init__()
         self.config = config
         self.cost = cost
@@ -51,11 +69,18 @@ class HungarianMatcher(nn.Module):
     def forward(
         self, preds: PackedBoxes, targets: PackedBoxes
     ) -> Result[Assignment, InputError]:
-        """Return checked detached indices; smaller side is fully assigned per sample.
+        """Find independent minimum-cost assignments within each sample.
 
-        CPU solver receives one explicit detached cost transfer. Output indices
-        live on the input device. Matching is nondifferentiable, calls no loss
-        criterion, and does not generate quality targets or orchestrate layers.
+        The smaller side is fully paired. Costs transfer once to the CPU solver; returned indices use the input device. Custom callable bugs propagate.
+
+        Args:
+            preds: Packed candidate geometry; query counts may differ by sample.
+            targets: Packed reference geometry in the same coordinate units, with the
+                same sample count and device. Counts may differ from preds.
+
+        Returns:
+            Ok(Assignment) with detached global paired indices and sample offsets, or
+            Err(InputError) for invalid records, costs, domain, or storage limits.
         """
         with torch.no_grad():
             match pairwise_costs(preds, targets, self.config, self.cost):
@@ -68,10 +93,20 @@ class HungarianMatcher(nn.Module):
 def gather_matched(
     preds: PackedBoxes, targets: PackedBoxes, assignment: Assignment
 ) -> tuple[PackedBoxes, PackedBoxes]:
-    """Gather matched geometry with gradients using trusted same-batch assignment.
+    """Gather paired packed geometry while preserving gradients.
 
-    Assignment must come from these input records; indices are borrowed. Gather
-    allocates output geometry and preserves per-sample boundaries, including empties.
+    This trusted helper does not validate arbitrary indices or assignments.
+
+    Args:
+        preds: The exact packed predictions used to obtain assignment.
+        targets: The exact packed references used to obtain assignment, in the same
+            units.
+        assignment: Valid global paired indices and sample offsets produced for
+            these records.
+
+    Returns:
+        Prediction and target PackedBoxes in paired order, sharing assignment
+        offsets; geometry is newly gathered and differentiable.
     """
     return PackedBoxes(
         preds.boxes[assignment.pred_indices], assignment.cu_seqlens

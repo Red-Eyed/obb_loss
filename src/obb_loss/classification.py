@@ -10,10 +10,17 @@ from obb_loss.result import Err, Ok, Result
 def validate_quality(
     logits: Tensor, quality: Tensor
 ) -> Result[tuple[Tensor, Tensor], InputError]:
-    """Require equal floating `[n, c]` tensors with finite logits and quality in [0,1].
+    """Validate logits against supplied classification quality targets.
 
-    Zero is a negative class. No target is synthesized or detached. Value admission
-    synchronizes accelerator tensors. Different floating dtypes are promoted internally.
+    Args:
+        logits: Floating [queries, classes] scores before sigmoid; no background
+            column.
+        quality: Floating [queries, classes] quality in [0, 1], aligned with logits;
+            zero marks a negative class. Target gradients are preserved.
+
+    Returns:
+        Ok(the borrowed tensor pair) or Err(InputError) for shape, floating dtype,
+        CPU/CUDA device, finiteness, or quality-range violations.
     """
     if logits.ndim != 2 or quality.shape != logits.shape:
         return Err(

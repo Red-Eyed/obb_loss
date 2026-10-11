@@ -14,7 +14,17 @@ if TYPE_CHECKING:
 
 
 def reduce_loss(values: Tensor, reduction: Reduction) -> Tensor:
-    """Reduce unreduced elements; empty sum/mean is a graph-connected zero."""
+    """Reduce element losses with defined empty behavior.
+
+    Args:
+        values: Unreduced floating losses whose elements are the reduction units.
+        reduction: NONE retains values; SUM adds all elements; MEAN averages
+            elements, including zeros.
+
+    Returns:
+        The original tensor for NONE or a scalar for SUM/MEAN; empty scalar
+        reductions are gradient-connected zeros.
+    """
     match reduction:
         case Reduction.NONE:
             return values
@@ -30,11 +40,18 @@ def sum_samples(
     values: Float[Tensor, "n"],  # noqa: F821, UP037
     cu_seqlens: Int[Tensor, "bp1"],  # noqa: F821, UP037
 ) -> Float[Tensor, "b"]:  # noqa: F821, UP037
-    """Sum packed `[n]` values into `[batch]`, retaining zero-length samples.
+    """Sum packed values within their owning samples.
 
-    Offsets must be valid, same-device cumulative lengths ending at n. Inputs
-    are borrowed. Known output sizes avoid data-dependent shape synchronization.
-    Empty outputs remain connected to autograd.
+    This pure helper trusts offsets and does not synchronize to infer output sizes.
+
+    Args:
+        values: Floating [count] element losses in packed sample order.
+        cu_seqlens: Valid same-device cumulative offsets, beginning at zero and
+            ending at count; repeated offsets define empty samples.
+
+    Returns:
+        Same-device [batch] sums, retaining zeros for empty samples and preserving
+        gradients.
     """
     count = cu_seqlens.numel() - 1
     indices = torch.repeat_interleave(

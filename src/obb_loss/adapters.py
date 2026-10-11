@@ -16,10 +16,21 @@ def pack_boxes(
     device: torch.device,
     dtype: torch.dtype,
 ) -> Result[PackedBoxes, InputError]:
-    """Concatenate per-sample `[n_i, 6]` tensors, preserving gradients and empty samples.
+    """Pack variable-length box tensors in sample order.
 
-    Device/dtype are explicit so even zero-sample input has a defined representation.
-    No input is moved, detached, or mutated. Concatenation allocates packed storage.
+    Concatenation preserves autograd and never mutates input tensors.
+
+    Args:
+        boxes: One [count, 6] tensor per sample, in (cx, cy, w, h, cos(theta),
+            sin(theta)) order. Empty samples retain their position.
+        device: Required device for every input and the packed output; inputs are
+            never moved. Defines storage for a zero-sample batch.
+        dtype: Required floating geometry dtype for every input and output; no
+            implicit conversion.
+
+    Returns:
+        Ok(PackedBoxes) with newly concatenated geometry and int64 offsets, or
+        Err(InputError) for invalid shape, geometry, device, or dtype.
     """
     counts = [0]
     for index, item in enumerate(boxes):
@@ -42,10 +53,17 @@ def pack_boxes(
 
 
 def pack_dense_boxes(boxes: Tensor) -> Result[PackedBoxes, InputError]:
-    """Flatten `[b, q, 6]` DETR geometry, retaining autograd and regular sample offsets.
+    """Pack dense decoder box outputs in sample/query order.
 
-    Rearrangement borrows a view where strides allow it and otherwise copies. This
-    adapter validates geometry; it does not match predictions or orchestrate layers.
+    Autograd is preserved. Packing borrows a view when strides allow and otherwise copies.
+
+    Args:
+        boxes: Floating [batch, queries, 6] geometry in (cx, cy, w, h, cos(theta),
+            sin(theta)) order, with positive sides and nonzero directions.
+
+    Returns:
+        Ok(PackedBoxes) with [batch * queries, 6] geometry and regular sample
+        offsets, or Err(InputError) for invalid inputs.
     """
     if boxes.ndim != 3 or boxes.shape[2] != 6:
         return Err(InputError(ErrorKind.SHAPE, "boxes", "expected [b, q, 6]"))
@@ -55,10 +73,17 @@ def pack_dense_boxes(boxes: Tensor) -> Result[PackedBoxes, InputError]:
 
 
 def boxes_from_angles(boxes: Tensor) -> Result[Tensor, InputError]:
-    """Convert explicit `[n, 5]` cx/cy/w/h/radians geometry to direction vectors.
+    """Convert angle-based boxes to the six-coordinate geometry representation.
 
-    No unit conversion or canonicalization is implicit; gradients pass through
-    sine/cosine. Full geometry admission is performed by packing helpers.
+    Angles are not canonicalized. Conversion preserves gradients; packing performs full geometry validation.
+
+    Args:
+        boxes: Floating [count, 5] values (cx, cy, width, height, theta); theta is
+            in radians. Coordinates and side units are retained.
+
+    Returns:
+        Ok([count, 6] tensor) ending in cos(theta), sin(theta), or Err(InputError)
+        for invalid shape/dtype.
     """
     if boxes.ndim != 2 or boxes.shape[1] != 5 or not boxes.is_floating_point():
         return Err(InputError(ErrorKind.SHAPE, "boxes", "expected floating [n, 5]"))

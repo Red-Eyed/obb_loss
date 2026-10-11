@@ -7,13 +7,23 @@ E = TypeVar("E")
 
 
 class Ok(NamedTuple, Generic[T]):
-    """Successful outcome; narrow before accessing its borrowed payload."""
+    """Represent a successful checked operation.
+
+    Attributes:
+        value: Typed success payload; narrow the Result with match before accessing
+            it. Payload ownership follows the operation contract.
+    """
 
     value: T
 
 
 class Err(NamedTuple, Generic[E]):
-    """Recoverable rejection with a precise diagnostic payload."""
+    """Represent a recoverable rejected operation.
+
+    Attributes:
+        error: Typed failure payload explaining why the operation could not return a
+            success value.
+    """
 
     error: E
 

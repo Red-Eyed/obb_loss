@@ -2,8 +2,8 @@
 
 Source: Murrugarra-Llerena et al., Gaussian Bounding Boxes and Probabilistic
 Intersection-over-Union for Object Detection (2021), https://arxiv.org/abs/2106.06072.
-The positive residual reformulation follows ml-sandbox/04_stable_probiou, not the
-paper's expanded determinant implementation. See docs/losses.md for departures.
+Positive shape and translation residuals avoid cancellation near identical boxes.
+Numerical domains and saturation behavior are documented in docs/losses.md.
 """
 
 from __future__ import annotations
@@ -80,13 +80,21 @@ def stable_probiou_loss(
     preds: Float[Tensor, "... 6"],  # noqa: F722
     targets: Float[Tensor, "... 6"],  # noqa: F722
 ) -> Float[Tensor, "..."]:  # noqa: UP037
-    """Return unreduced float64 Hellinger loss for trusted broadcastable geometry.
+    """Compute unreduced Gaussian-box Hellinger loss.
 
-    CPU/CUDA only; sides positive and directions finite/nonzero. Pairwise normalized
-    sides must be >=1e-30, offsets <=1e30. Autocast is locally disabled; inputs are
-    neither detached nor mutated. Equality chooses the norm's zero subgradient.
-    Gradient casts into a lower precision input can overflow. Use checked_probiou_loss
-    for aligned admission with typed failures; this pure path omits value validation.
+    Inputs must share a CPU/CUDA device. Relative to the largest side in each pair, sides must be >=1e-30 and center offsets <=1e30. Autocast is disabled locally; inputs are not detached or mutated. Equality has a zero loss subgradient. Low-precision leaf gradient casts can overflow. This pure function trusts inputs; checked_probiou_loss validates aligned pairs.
+
+    Args:
+        preds: Predicted aligned boxes in (cx, cy, width, height, cos(theta),
+            sin(theta)) order; positive sides and nonzero directions, in shared
+            coordinate units. Leading dimensions must broadcast with targets.
+        targets: Reference boxes in the same order and units as preds, paired
+            elementwise with predictions. Leading dimensions must broadcast with
+            preds.
+
+    Returns:
+        Float64 values in [0, 1] over the broadcast leading dimensions; zero means
+        identical Gaussian boxes.
     """
     with torch.autocast(device_type=preds.device.type, enabled=False):
         root = _root_distance(preds, targets)
@@ -100,10 +108,21 @@ def stable_probiou(
     preds: Float[Tensor, "... 6"],  # noqa: F722
     targets: Float[Tensor, "... 6"],  # noqa: F722
 ) -> Float[Tensor, "..."]:  # noqa: UP037
-    """Return float64 Gaussian similarity, one minus the trusted Hellinger loss.
+    """Compute Gaussian-box similarity as one minus Hellinger loss.
 
-    Uses the same domain, ownership, autocast, and gradient contract as the loss.
-    Similarity measures Gaussian overlap rather than exact polygon intersection.
+    Inputs must share a CPU/CUDA device. Relative to the largest side in each pair, sides must be >=1e-30 and center offsets <=1e30. Autocast is disabled locally; inputs are not detached or mutated. Equality has a zero loss subgradient. Low-precision leaf gradient casts can overflow. This pure function trusts inputs; checked_probiou_loss validates aligned pairs.
+
+    Args:
+        preds: Predicted aligned boxes in (cx, cy, width, height, cos(theta),
+            sin(theta)) order; positive sides and nonzero directions, in shared
+            coordinate units. Leading dimensions must broadcast with targets.
+        targets: Reference boxes in the same order and units as preds, paired
+            elementwise with predictions. Leading dimensions must broadcast with
+            preds.
+
+    Returns:
+        Float64 values in [0, 1] over the broadcast leading dimensions; one means
+        identical Gaussian boxes.
     """
     return 1 - stable_probiou_loss(preds, targets)
 
@@ -111,7 +130,19 @@ def stable_probiou(
 def validate_pairs(
     preds: Tensor, targets: Tensor
 ) -> Result[tuple[Tensor, Tensor], InputError]:
-    """Admit aligned pairs and the reference's pair-dependent numerical domain."""
+    """Validate aligned pairs and their ProbIoU numerical domain.
+
+    Args:
+        preds: Predicted aligned boxes in (cx, cy, width, height, cos(theta),
+            sin(theta)) order; positive sides and nonzero directions, in shared
+            coordinate units. Shape [pairs, 6].
+        targets: Reference boxes in the same order and units as preds, paired
+            elementwise with predictions. Same shape and CPU/CUDA device.
+
+    Returns:
+        Ok(the borrowed tensor pair) or Err(InputError) for invalid geometry,
+        alignment, device, normalized side sizes, or normalized offsets.
+    """
     for name, value in (("preds", preds), ("targets", targets)):
         match validate_geometry(value, name):
             case Err() as failure:
@@ -137,7 +168,21 @@ def validate_pairs(
 
 
 def checked_probiou_loss(preds: Tensor, targets: Tensor) -> Result[Tensor, InputError]:
-    """Validate aligned geometry and compute loss; accelerator checks synchronize."""
+    """Validate aligned box pairs and compute their ProbIoU loss.
+
+    Accelerator admission checks synchronize. Autograd is preserved for both inputs.
+
+    Args:
+        preds: Predicted aligned boxes in (cx, cy, width, height, cos(theta),
+            sin(theta)) order; positive sides and nonzero directions, in shared
+            coordinate units. Shape [pairs, 6].
+        targets: Reference boxes in the same order and units as preds, paired
+            elementwise with predictions. Same [pairs, 6] shape and CPU/CUDA device.
+
+    Returns:
+        Ok(float64 [pairs] Hellinger losses) or Err(InputError) for invalid
+        geometry, alignment, device, or numerical domain.
+    """
     match validate_pairs(preds, targets):
         case Err() as failure:
             return failure

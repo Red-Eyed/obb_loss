@@ -29,7 +29,13 @@ class ErrorKind(Enum):
 
 
 class InputError(NamedTuple):
-    """Identify the rejected field and its actionable reason."""
+    """Describe a recoverable input-contract rejection.
+
+    Attributes:
+        kind: Category of contract violation used for typed recovery.
+        field: Rejected parameter or field path.
+        detail: Human-readable reason describing the required contract.
+    """
 
     kind: ErrorKind
     field: str
@@ -37,12 +43,16 @@ class InputError(NamedTuple):
 
 
 class PackedBoxes(NamedTuple):
-    """Borrow `[n, 6]` geometry and `[b+1]` sample offsets without mutating them.
+    """Borrow packed oriented-box geometry and its sample boundaries.
 
-    Geometry is cx, cy, positive width/height, and a nonzero single-angle direction.
-    Centers and sides use one shared coordinate frame/unit. Records are immutable;
-    tensor storage is not. Callers must preserve admitted contents during execution.
-    Repeated offsets retain empty samples. Direct construction is the trusted path.
+    The record is immutable but its tensors are mutable. Callers must preserve valid contents during execution. Use make_packed_boxes for checked construction.
+
+    Attributes:
+        boxes: Floating [count, 6] values (cx, cy, w, h, cos(theta), sin(theta));
+            finite positive sides and nonzero directions, in one coordinate
+            frame/unit.
+        cu_seqlens: Same-device int32/int64 [batch + 1] offsets, starting at 0 and
+            ending at count; repeated offsets retain empty samples.
     """
 
     # Jaxtyping dimensions are strings, not Python expressions.
@@ -53,7 +63,17 @@ class PackedBoxes(NamedTuple):
 def validate_geometry(
     boxes: Tensor, field: str = "boxes"
 ) -> Result[Tensor, InputError]:
-    """Check six-coordinate geometry, synchronizing value checks on accelerators."""
+    """Validate six-coordinate oriented-box geometry.
+
+    Args:
+        boxes: Floating [count, 6] geometry; finite centers, positive sides, and
+            nonzero direction vectors on CPU/CUDA.
+        field: Parameter path used to identify rejected geometry in diagnostics.
+
+    Returns:
+        Ok(the borrowed tensor) or Err(InputError) identifying a geometry, shape,
+        dtype, or device violation.
+    """
     if boxes.ndim != 2 or boxes.shape[1] != 6:
         return Err(InputError(ErrorKind.SHAPE, field, "expected [n, 6]"))
     if boxes.dtype not in (torch.float16, torch.bfloat16, torch.float32, torch.float64):
@@ -72,7 +92,18 @@ def validate_geometry(
 def validate_layout(
     offsets: Tensor, total: int, device: torch.device
 ) -> Result[Tensor, InputError]:
-    """Admit monotonic same-device offsets, including a zero-sample `[0]` layout."""
+    """Validate cumulative packed sample boundaries.
+
+    Args:
+        offsets: Int32/int64 [batch + 1] cumulative counts; monotonic, beginning at
+            zero and ending at total.
+        total: Number of packed items the final offset must equal.
+        device: Required device of offsets, shared with the packed values.
+
+    Returns:
+        Ok(the borrowed offsets) or Err(InputError) for invalid boundaries, dtype,
+        or device.
+    """
     if offsets.ndim != 1 or offsets.numel() == 0:
         return Err(InputError(ErrorKind.SHAPE, "cu_seqlens", "expected nonempty [b+1]"))
     if offsets.dtype not in (torch.int32, torch.int64):
@@ -93,7 +124,20 @@ def validate_layout(
 def make_packed_boxes(
     boxes: Tensor, cu_seqlens: Tensor
 ) -> Result[PackedBoxes, InputError]:
-    """Borrow admitted geometry and offsets; rejection never manufactures a box."""
+    """Validate and borrow packed box tensors.
+
+    Value checks synchronize accelerators. Admitted tensors must remain valid while used.
+
+    Args:
+        boxes: Floating [count, 6] geometry (cx, cy, w, h, cos(theta), sin(theta));
+            finite values, positive sides, and nonzero directions are required.
+        cu_seqlens: Same-device int32/int64 [batch + 1] offsets, starting at zero
+            and ending at count. Repeated offsets represent empty samples.
+
+    Returns:
+        Ok(PackedBoxes) borrowing both tensors, or Err(InputError) identifying an
+        invalid geometry/layout field.
+    """
     match validate_geometry(boxes):
         case Err() as failure:
             return failure
@@ -107,7 +151,14 @@ def make_packed_boxes(
 
 
 def sample_indices(packed: PackedBoxes) -> Int[Tensor, "n"]:  # noqa: F821, UP037
-    """Map each box to its sample without lists or data-dependent output sizing."""
+    """Map packed boxes to their owning samples.
+
+    Args:
+        packed: Valid packed geometry whose offsets define each sample segment.
+
+    Returns:
+        Same-device int64 [count] sample indices, including gaps for empty samples.
+    """
     cu = packed.cu_seqlens
     return torch.repeat_interleave(
         torch.arange(cu.shape[0] - 1, device=cu.device),

@@ -41,7 +41,18 @@ class TargetCount(Enum):
 
 
 class SetLosses(NamedTuple):
-    """Normalized components and weighted total: `[batch]` for NONE, scalar otherwise."""
+    """Return reduced component losses, their weighted total, and assignment.
+
+    Loss tensors are float64 [batch] for Reduction.NONE and scalars for SUM/MEAN.
+
+    Attributes:
+        total: Weighted sum of the three normalized loss components.
+        classification: Normalized unweighted VFL/QFL loss over query/classes.
+        l1: Normalized unweighted center/side L1 loss over matched boxes.
+        probiou: Normalized unweighted ProbIoU loss over matched boxes.
+        assignment: Detached global query/reference pair indices and cumulative
+            sample pair counts.
+    """
 
     total: Tensor
     classification: Tensor
@@ -140,7 +151,13 @@ class SetCriterion(nn.Module):
     """Match and supervise one decoder layer; callers aggregate auxiliary layers."""
 
     def __init__(self, config: SetCriterionConfig = _DEFAULT_CONFIG) -> None:
-        """Register the matcher and store independent matching and loss weights."""
+        """Configure matching and loss terms for one decoder layer.
+
+        Args:
+            config: Independent training weights, matcher weights/storage, and VFL/QFL
+                formulation parameters. Classification weight/reduction retain defaults
+                because this criterion applies them centrally.
+        """
         super().__init__()
         self.config = config
         self.matcher = SetHungarianMatcher(config.matcher)
@@ -154,17 +171,31 @@ class SetCriterion(nn.Module):
         reduction: Reduction = Reduction.SUM,
         normalizer: float | TargetCount = TargetCount.PER_BATCH,
     ) -> Result[SetLosses, InputError]:
-        """Return float64 per-sample losses or their sum/mean using explicit normalization.
+        """Match one decoder layer and compute its normalized sample losses.
 
-        Classification uses caller-supplied quality without detaching it. Matching
-        ignores quality and gradients. L1 compares only center/side coordinates;
-        ProbIoU supervises orientation. All query/classes contribute classification.
-        Use an explicit positive normalizer for caller-owned distributed reduction.
-        Zero-weight losses skip evaluation and return gradient-connected zeros.
-        NONE returns `[batch]`, SUM sums samples, and MEAN averages samples.
-        PER_SAMPLE divides by each sample's target count; PER_BATCH divides by
-        the batch target count. Counts are clamped to one. An explicit positive
-        scalar divides every sample equally. Normalization precedes reduction.
+        Normalization precedes reduction. Classification supervises all query/classes; L1 and ProbIoU supervise matched pairs. L1 excludes direction. Float64 work disables autocast locally. Zero-weight terms skip computation. The caller aggregates decoder layers.
+
+        Args:
+            preds: Packed geometry and [queries, classes] logits for one decoder layer,
+                sharing box order and device. Boxes and targets must use shared
+                coordinate units.
+            targets: Packed reference geometry, int64 class labels, and caller-supplied
+                [targets] quality in [0, 1]; labels and quality follow box order. Sample
+                count/device must match preds; quality is never detached.
+            reduction: Operation across normalized sample losses: NONE returns [batch],
+                SUM returns their sum, and MEAN averages all samples including empty
+                ones. Zero samples reduce to a connected zero.
+            normalizer: PER_SAMPLE divides each sample by its own target count;
+                PER_BATCH divides all samples by the local batch target count. Counts
+                are clamped to one. A finite positive scalar supplies a shared divisor,
+                e.g. a distributed target-count normalization.
+
+        Returns:
+            Ok(SetLosses) with normalized unweighted classification/L1/ProbIoU
+            components, their weighted total, and detached assignment. Loss fields are
+            [batch] for NONE and scalar otherwise. Err(InputError) reports invalid
+            records, labels, quality, costs, domains, normalization, reduction, storage
+            limits, or nonfinite losses.
         """
         if not isinstance(reduction, Reduction):
             return Err(

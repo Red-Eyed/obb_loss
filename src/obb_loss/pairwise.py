@@ -17,7 +17,16 @@ if TYPE_CHECKING:
 
 
 class CostBlock(NamedTuple):
-    """Metadata for one sample's row-major rectangular block in packed costs."""
+    """Identify one sample rectangle within the packed cost buffer.
+
+    Attributes:
+        pred_start: Global row offset into packed predictions.
+        target_start: Global column offset into packed references.
+        rows: Prediction count for this sample.
+        columns: Reference count for this sample.
+        start: Inclusive offset into packed costs.
+        end: Exclusive offset, with end - start equal to rows * columns.
+    """
 
     pred_start: int
     target_start: int
@@ -28,7 +37,14 @@ class CostBlock(NamedTuple):
 
 
 class PackedCosts(NamedTuple):
-    """Float64 row-major costs and ordered per-sample rectangular metadata."""
+    """Store rectangular costs for each sample without cross-sample pairs.
+
+    Attributes:
+        values: Floating one-dimensional row-major costs concatenated in sample
+            order; pairwise builders produce float64.
+        blocks: Ordered sample metadata identifying row/column counts, source
+            offsets, and ranges within values.
+    """
 
     values: Tensor
     blocks: tuple[CostBlock, ...]
@@ -37,7 +53,18 @@ class PackedCosts(NamedTuple):
 def validate_output(
     values: Tensor, count: int, device: torch.device
 ) -> Result[Tensor, InputError]:
-    """Check observable callback output; mathematical validity remains user-owned."""
+    """Validate the observable output contract of a custom cost or loss.
+
+    Args:
+        values: Callback result expected to contain one floating value per aligned
+            pair.
+        count: Required number of output elements.
+        device: Required device shared with the input geometry.
+
+    Returns:
+        Ok(values) or Err(InputError) for non-tensor, shape, dtype, device, or
+        nonfinite output.
+    """
     if not isinstance(values, Tensor):
         return Err(InputError(ErrorKind.CALLBACK, "output", "expected a tensor"))
     if (
@@ -58,7 +85,21 @@ def validate_output(
 def cost_blocks(
     preds: PackedBoxes, targets: PackedBoxes, limit: int
 ) -> Result[tuple[CostBlock, ...], InputError]:
-    """Transfer offsets once to host and reject solver storage beyond the limit."""
+    """Describe bounded rectangular cost storage for each sample.
+
+    Offsets transfer once to the host; no cost values are computed.
+
+    Args:
+        preds: Valid packed prediction geometry; segment lengths define rectangle
+            rows.
+        targets: Valid same-batch/device reference geometry; segment lengths define
+            columns.
+        limit: Maximum total number of cost entries across all rectangles.
+
+    Returns:
+        Ok(ordered CostBlock metadata) or Err(InputError) for sample/device mismatch
+        or excessive pair counts.
+    """
     if (
         preds.cu_seqlens.shape != targets.cu_seqlens.shape
         or preds.boxes.device != targets.boxes.device
@@ -123,12 +164,23 @@ def pairwise_costs(
     config: MatcherConfig,
     function: BoxFunction = stable_probiou_loss,
 ) -> Result[PackedCosts, InputError]:
-    """Construct checked segmented costs, preserving gradients if invoked directly.
+    """Build rectangular geometry cost blocks within each sample.
 
-    Full output is O(sum(n_i*m_i)); temporary pair indices/geometry are bounded by
-    chunk_size. max_pairs limits full storage. No all-pairs global matrix is built.
-    Offsets transfer to host once; checked chunks synchronize. Assignment callers
-    should use no_grad. Custom function bugs propagate; output failures are typed.
+    Full storage is sum(queries_i * targets_i), not a global cross-sample matrix. Direct calls retain gradients; custom callable bugs propagate.
+
+    Args:
+        preds: Packed candidate boxes whose sample segments define cost rows.
+        targets: Packed reference boxes whose corresponding segments define cost
+            columns; same sample count/device and coordinate units as preds.
+        config: Chunk-size limit on temporary pairs and max_pairs limit on total
+            stored costs.
+        function: Aligned [pairs, 6] -> [pairs] cost callable; outputs must be
+            finite floating costs on the input device, with smaller values
+            preferred.
+
+    Returns:
+        Ok(PackedCosts) with float64 row-major values and per-sample block metadata,
+        or Err(InputError) for invalid input/output contracts or storage limits.
     """
     for packed in (preds, targets):
         match make_packed_boxes(*packed):

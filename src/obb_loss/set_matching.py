@@ -89,11 +89,22 @@ def set_pairwise_costs(
     targets: PackedTargets,
     config: SetMatcherConfig = _DEFAULT_CONFIG,
 ) -> Result[PackedCosts, InputError]:
-    """Build checked per-sample costs with O(sum(queries*targets)) full storage.
+    """Build classification, L1, and ProbIoU cost blocks within each sample.
 
-    Temporary pair tensors are bounded by chunk_size; max_pairs bounds output
-    storage. Disabled costs skip their computations. Direct calls retain gradients;
-    the matcher disables gradients. Quality targets do not affect assignments.
+    Costs use negative sigmoid target-class probability, center/side L1, and ProbIoU loss. Disabled costs skip evaluation. Direct calls retain gradients.
+
+    Args:
+        preds: Packed geometry and [queries, classes] logits for one decoder layer,
+            sharing box order and device.
+        targets: Packed reference geometry, int64 class labels, and caller-supplied
+            [targets] quality in [0, 1]; labels and quality follow box order.
+            Quality is validated but does not affect matching costs.
+        config: Independent matching-cost weights and temporary/full storage limits;
+            unrelated to training-loss weights.
+
+    Returns:
+        Ok(PackedCosts) with float64 row-major values or Err(InputError) for invalid
+        records, label bounds, enabled numerical domains, costs, or storage limits.
     """
     match validate_sets(preds, targets):
         case Err() as failure:
@@ -121,7 +132,12 @@ class SetHungarianMatcher(nn.Module):
     """Assign queries to labeled targets with independent weighted set costs."""
 
     def __init__(self, config: SetMatcherConfig = _DEFAULT_CONFIG) -> None:
-        """Store immutable matching weights and memory bounds."""
+        """Configure classification-aware set assignment.
+
+        Args:
+            config: Independent class/L1/ProbIoU matching weights and chunk/full-cost
+                storage limits.
+        """
         super().__init__()
         self.config = config
 
@@ -129,7 +145,22 @@ class SetHungarianMatcher(nn.Module):
     def forward(
         self, preds: PackedPredictions, targets: PackedTargets
     ) -> Result[Assignment, InputError]:
-        """Return detached global indices from the shared CPU assignment solver."""
+        """Match queries and labeled targets independently within each sample.
+
+        The smaller side is fully paired. Matching disables autograd and transfers costs to the shared CPU solver; indices return to the input device.
+
+        Args:
+            preds: Packed geometry and [queries, classes] logits for one decoder layer,
+                sharing box order and device.
+            targets: Packed reference geometry, int64 class labels, and caller-supplied
+                [targets] quality in [0, 1]; labels and quality follow box order.
+                Quality never changes assignment.
+
+        Returns:
+            Ok(Assignment) with detached paired global indices and repeated offsets for
+            empty samples, or Err(InputError) for invalid records, costs, enabled
+            domains, or storage limits.
+        """
         with torch.no_grad():
             match set_pairwise_costs(preds, targets, self.config):
                 case Err() as failure:
