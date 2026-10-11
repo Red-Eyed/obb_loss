@@ -4,6 +4,8 @@ import math
 
 import pytest
 import torch
+import torch.autograd
+import torch.testing
 from torch import Tensor
 
 from obb_loss.config import QFLConfig, Reduction, VFLConfig, parse_config
@@ -85,7 +87,7 @@ def test_wrappers_configs_and_quality_rejection(
 
 def test_empty_quality(device: torch.device) -> None:
     """Empty classification mean is finite and gradient-connected."""
-    logits = torch.empty((0, 3), device=device, requires_grad=True)
+    logits = torch.empty((0, 3), device=device).requires_grad_()
     loss = QualityFocalLoss().forward(logits, logits.detach())
     assert loss.item() == 0
     loss.backward()

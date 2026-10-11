@@ -5,6 +5,8 @@ from itertools import permutations
 
 import pytest
 import torch
+import torch.autograd
+import torch.testing
 from torch import Tensor
 
 import obb_loss as obb

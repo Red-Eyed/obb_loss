@@ -10,7 +10,7 @@ lint:
     uv run ruff check src tools examples
 
 types:
-    uv run pyrefly check
+    uv run python -m tools.typecheck
 
 test:
     uv run pytest

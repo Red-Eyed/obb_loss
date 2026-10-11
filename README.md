@@ -129,9 +129,16 @@ built-in module from validated `ProbIoUConfig`, `VFLConfig`, or `QFLConfig`.
 ## Verification
 
 Use `uv sync` to install the development environment and `just check` to run strict
-formatting, lint, type, and test checks. Python development is pinned to 3.11; package
+formatting, lint, type, and test checks. Python development is pinned to 3.12; package
 metadata supports Python 3.11+. Tool settings live separately in `ruff.toml`,
-`pyrefly.toml`, and `pytest.ini`. Each check recipe synchronizes its environment.
+`pyrefly.toml`, and `pytest.ini`.
+
+Tensor annotations use native Pyrefly shapes. Shape packages are development-only,
+versioned with the checker, and installed on Python 3.12+. Shape imports stay under
+`TYPE_CHECKING`, so Python 3.11 runtime users need neither package. `just types` uses
+`tools.typecheck` to provision an isolated Python 3.12 checker when invoked from 3.11;
+the checker still validates Python 3.11 syntax. CI retains runtime tests for 3.11–3.14.
+See [typing contracts](docs/typing.md) for guarantees and experimental stub limitations.
 
 ```text
 just stress --samples 10000 --chunk-size 512 --dtype FP64

@@ -142,7 +142,8 @@ class SetHungarianMatcher(nn.Module):
         self.config = config
 
     @override
-    def forward(
+    # Torch stubs declare variadic forward; this module intentionally narrows it.
+    def forward(  # pyrefly: ignore[bad-override]
         self, preds: PackedPredictions, targets: PackedTargets
     ) -> Result[Assignment, InputError]:
         """Match queries and labeled targets independently within each sample.

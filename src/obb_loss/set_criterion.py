@@ -163,7 +163,8 @@ class SetCriterion(nn.Module):
         self.matcher = SetHungarianMatcher(config.matcher)
 
     @override
-    def forward(
+    # Torch stubs declare variadic forward; this module intentionally narrows it.
+    def forward(  # pyrefly: ignore[bad-override]
         self,
         preds: PackedPredictions,
         targets: PackedTargets,

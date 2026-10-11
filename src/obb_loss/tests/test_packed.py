@@ -2,6 +2,7 @@
 
 import pytest
 import torch
+import torch.testing
 from einops import rearrange
 from torch import Tensor
 

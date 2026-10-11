@@ -21,9 +21,13 @@ reread changed files, and Pyrefly on committed Python files, plus relevant pytes
 ## Contracts
 
 Use strict Rustic Python: small local Ok/Err unions, precise error records, and match
-dispatch. Use NamedTuple tensor records, jaxtyping shape annotations, einops rearrangement,
+dispatch. Use NamedTuple tensor records, native Pyrefly shape annotations, einops rearrangement,
 and Pydantic configs outside tensor execution. Document every module, class, and function.
 Library tensors are borrowed and never mutated. Expected public failures return typed errors.
+Keep shape imports and symbols under TYPE_CHECKING with postponed annotations so
+Python 3.11 does not import the Python 3.12-only shape package. Run Pyrefly through
+`uv run python -m tools.typecheck`, which provisions the locked shape environment.
+Development defaults to Python 3.12; package metadata and runtime tests retain 3.11+.
 
 Pack at integration boundaries; preserve empty samples and autograd. Geometry is six
 coordinates `(cx, cy, w, h, cos(theta), sin(theta))`. Float64-required criteria disable

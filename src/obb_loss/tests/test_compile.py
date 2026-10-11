@@ -1,6 +1,7 @@
 """Verify supported tensor-only execution across changing packed dimensions."""
 
 import torch
+import torch.testing
 
 from obb_loss.criterion import ProbIoULoss
 from obb_loss.packed import PackedBoxes

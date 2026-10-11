@@ -63,7 +63,8 @@ class ProbIoULoss(nn.Module):
         self.config = config
 
     @override
-    def forward(self, preds: PackedBoxes, targets: PackedBoxes) -> Tensor:
+    # Torch stubs declare variadic forward; this module intentionally narrows it.
+    def forward(self, preds: PackedBoxes, targets: PackedBoxes) -> Tensor:  # pyrefly: ignore[bad-override]
         """Evaluate ProbIoU on trusted, already matched packed boxes.
 
         Inputs must satisfy the ProbIoU numerical domain. A zero weight skips the loss computation. Use checked for typed input failures; this path omits synchronizing value validation.

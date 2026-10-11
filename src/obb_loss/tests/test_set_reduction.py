@@ -2,6 +2,7 @@
 
 import pytest
 import torch
+import torch.testing
 
 import obb_loss as obb
 
@@ -148,8 +149,8 @@ def test_zero_samples_and_empty_gradients(
     device: torch.device, reduction: obb.Reduction
 ) -> None:
     """Zero samples yield an empty vector or a differentiable scalar zero."""
-    boxes = torch.empty(0, 6, device=device, dtype=torch.float64, requires_grad=True)
-    logits = torch.empty(0, 2, device=device, dtype=torch.float64, requires_grad=True)
+    boxes = torch.empty(0, 6, device=device, dtype=torch.float64).requires_grad_()
+    logits = torch.empty(0, 2, device=device, dtype=torch.float64).requires_grad_()
     offsets = torch.tensor([0], device=device)
     preds = obb.PackedPredictions(obb.PackedBoxes(boxes, offsets), logits)
     targets = obb.PackedTargets(

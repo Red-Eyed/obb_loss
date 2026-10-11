@@ -7,14 +7,16 @@ from typing import TYPE_CHECKING
 import torch
 
 if TYPE_CHECKING:
-    from jaxtyping import Float
+    from shape_extensions import IntVar
     from torch import Tensor
+
+    N = IntVar("N")
 
 
 def box_l1_loss(
-    preds: Float[Tensor, "n 6"],  # noqa: F722
-    targets: Float[Tensor, "n 6"],  # noqa: F722
-) -> Float[Tensor, "n"]:  # noqa: F821, UP037
+    preds: Tensor[[N, 6]],
+    targets: Tensor[[N, 6]],
+) -> Tensor[[N]]:
     """Compute center and side L1 error for each matched box pair.
 
     Direction coordinates are excluded. Inputs are trusted; autocast is disabled locally and gradients flow to both tensors.

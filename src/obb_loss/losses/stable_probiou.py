@@ -12,6 +12,7 @@ import math
 from typing import TYPE_CHECKING
 
 import torch
+import torch.linalg
 from einops import rearrange
 from torch import Tensor
 
@@ -19,7 +20,12 @@ from obb_loss.packed import ErrorKind, InputError, validate_geometry
 from obb_loss.result import Err, Ok, Result
 
 if TYPE_CHECKING:
-    from jaxtyping import Float
+    from typing import TypeVar
+
+    from shape_extensions import Elements, IntTuple
+
+    P = TypeVar("P", bound=IntTuple)
+    T = TypeVar("T", bound=IntTuple)
 
 
 def _directions(boxes: Tensor) -> tuple[Tensor, Tensor]:
@@ -77,9 +83,9 @@ def _root_distance(first: Tensor, second: Tensor) -> Tensor:
 
 
 def stable_probiou_loss(
-    preds: Float[Tensor, "... 6"],  # noqa: F722
-    targets: Float[Tensor, "... 6"],  # noqa: F722
-) -> Float[Tensor, "..."]:  # noqa: UP037
+    preds: Tensor[[*Elements[P], 6]],
+    targets: Tensor[[*Elements[T], 6]],
+) -> Tensor:
     """Compute unreduced Gaussian-box Hellinger loss.
 
     Inputs must share a CPU/CUDA device. Relative to the largest side in each pair, sides must be >=1e-30 and center offsets <=1e30. Autocast is disabled locally; inputs are not detached or mutated. Equality has a zero loss subgradient. Low-precision leaf gradient casts can overflow. This pure function trusts inputs; checked_probiou_loss validates aligned pairs.
@@ -105,9 +111,9 @@ def stable_probiou_loss(
 
 
 def stable_probiou(
-    preds: Float[Tensor, "... 6"],  # noqa: F722
-    targets: Float[Tensor, "... 6"],  # noqa: F722
-) -> Float[Tensor, "..."]:  # noqa: UP037
+    preds: Tensor[[*Elements[P], 6]],
+    targets: Tensor[[*Elements[T], 6]],
+) -> Tensor:
     """Compute Gaussian-box similarity as one minus Hellinger loss.
 
     Inputs must share a CPU/CUDA device. Relative to the largest side in each pair, sides must be >=1e-30 and center offsets <=1e30. Autocast is disabled locally; inputs are not detached or mutated. Equality has a zero loss subgradient. Low-precision leaf gradient casts can overflow. This pure function trusts inputs; checked_probiou_loss validates aligned pairs.

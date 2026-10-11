@@ -9,8 +9,11 @@ import torch
 from obb_loss.config import Reduction
 
 if TYPE_CHECKING:
-    from jaxtyping import Float, Int
+    from shape_extensions import IntVar
     from torch import Tensor
+
+    N = IntVar("N")
+    B = IntVar("B")
 
 
 def reduce_loss(values: Tensor, reduction: Reduction) -> Tensor:
@@ -37,9 +40,9 @@ def reduce_loss(values: Tensor, reduction: Reduction) -> Tensor:
 
 
 def sum_samples(
-    values: Float[Tensor, "n"],  # noqa: F821, UP037
-    cu_seqlens: Int[Tensor, "bp1"],  # noqa: F821, UP037
-) -> Float[Tensor, "b"]:  # noqa: F821, UP037
+    values: Tensor[[N]],
+    cu_seqlens: Tensor[[B + 1]],
+) -> Tensor[[B]]:
     """Sum packed values within their owning samples.
 
     This pure helper trusts offsets and does not synchronize to infer output sizes.
@@ -53,7 +56,7 @@ def sum_samples(
         Same-device [batch] sums, retaining zeros for empty samples and preserving
         gradients.
     """
-    count = cu_seqlens.numel() - 1
+    count = cu_seqlens.shape[0] - 1
     indices = torch.repeat_interleave(
         torch.arange(count, device=values.device),
         cu_seqlens[1:] - cu_seqlens[:-1],

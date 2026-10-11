@@ -4,6 +4,9 @@ import math
 
 import pytest
 import torch
+import torch.autograd
+import torch.linalg
+import torch.testing
 from einops import rearrange
 from torch import Tensor
 
@@ -57,11 +60,8 @@ def matrix_loss(first: Tensor, second: Tensor) -> Tensor:
     solution = torch.linalg.solve(average, rearrange(delta, "n c -> n c 1"))
     translation = (delta * rearrange(solution, "n c 1 -> n c")).sum(-1) / 8
     shape = (
-        torch.linalg.slogdet(average).logabsdet
-        - (
-            torch.linalg.slogdet(matrices[0]).logabsdet
-            + torch.linalg.slogdet(matrices[1]).logabsdet
-        )
+        torch.linalg.slogdet(average)[1]
+        - (torch.linalg.slogdet(matrices[0])[1] + torch.linalg.slogdet(matrices[1])[1])
         / 2
     ) / 2
     return (-torch.expm1(-(translation + shape))).sqrt()
@@ -159,7 +159,7 @@ def test_autocast_scope_and_packed_criterion(pair: tuple[Tensor, Tensor]) -> Non
 
 def test_empty_criterion(device: torch.device) -> None:
     """Empty mean remains graph-connected and does not generate NaN."""
-    boxes = torch.empty((0, 6), device=device, requires_grad=True)
+    boxes = torch.empty((0, 6), device=device).requires_grad_()
     packed = PackedBoxes(boxes, torch.tensor([0, 0], device=device))
     loss = ProbIoULoss().forward(packed, packed)
     assert loss.item() == 0

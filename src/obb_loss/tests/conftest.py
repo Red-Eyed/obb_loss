@@ -2,6 +2,7 @@
 
 import pytest
 import torch
+import torch.cuda
 
 
 @pytest.fixture(params=["cpu", pytest.param("cuda", marks=pytest.mark.cuda)])

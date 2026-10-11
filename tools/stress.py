@@ -3,9 +3,10 @@
 from collections.abc import Callable
 from datetime import UTC, datetime
 from enum import Enum
-from typing import Annotated, Literal, Self, assert_never
+from typing import Annotated, Literal, Self, assert_never, cast
 
 import torch
+import torch.autograd
 from einops import rearrange
 from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import BaseSettings, CliApp, SettingsConfigDict
@@ -25,15 +26,16 @@ class InputDtype(Enum):
 
 def torch_dtype(value: InputDtype) -> torch.dtype:
     """Translate a closed precision selection without string reflection."""
+    # Native Torch stubs currently expose dtype constants as Any.
     match value:
         case InputDtype.FP16:
-            return torch.float16
+            return cast("torch.dtype", torch.float16)
         case InputDtype.BF16:
-            return torch.bfloat16
+            return cast("torch.dtype", torch.bfloat16)
         case InputDtype.FP32:
-            return torch.float32
+            return cast("torch.dtype", torch.float32)
         case InputDtype.FP64:
-            return torch.float64
+            return cast("torch.dtype", torch.float64)
         case _:
             assert_never(value)
 
@@ -147,12 +149,14 @@ def sample_pair(
 
 def _valid_geometry(first: Tensor, second: Tensor) -> Tensor:
     """Distinguish input cast underflow/overflow from arithmetic failures."""
-    return (
-        torch.isfinite(first).all(-1)
-        & torch.isfinite(second).all(-1)
-        & (first[:, 2:4] > 0).all(-1)
-        & (second[:, 2:4] > 0).all(-1)
-    )
+    return torch.stack(
+        (
+            torch.isfinite(first).all(-1),
+            torch.isfinite(second).all(-1),
+            (first[:, 2:4] > 0).all(-1),
+            (second[:, 2:4] > 0).all(-1),
+        )
+    ).all(0)
 
 
 def _silent_progress(done: int, total: int) -> None:
@@ -208,7 +212,7 @@ def simulate(
     """
     report = StressReport(
         timestamp=datetime.now(UTC),
-        torch_version=str(torch.__version__),
+        torch_version=torch.__version__,
         settings=settings,
         evaluated=0,
         rejected_input_quantization=0,

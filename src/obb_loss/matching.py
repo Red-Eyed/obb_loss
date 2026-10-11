@@ -66,7 +66,8 @@ class HungarianMatcher(nn.Module):
         self.cost = cost
 
     @override
-    def forward(
+    # Torch stubs declare variadic forward; this module intentionally narrows it.
+    def forward(  # pyrefly: ignore[bad-override]
         self, preds: PackedBoxes, targets: PackedBoxes
     ) -> Result[Assignment, InputError]:
         """Find independent minimum-cost assignments within each sample.

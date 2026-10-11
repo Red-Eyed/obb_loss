@@ -5,8 +5,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
-    from jaxtyping import Float
+    from shape_extensions import IntVar
     from torch import Tensor
+
+    N = IntVar("N")
 
 
 class BoxFunction(Protocol):
@@ -14,10 +16,10 @@ class BoxFunction(Protocol):
 
     def __call__(
         self,
-        preds: Float[Tensor, "n 6"],  # noqa: F722
-        targets: Float[Tensor, "n 6"],  # noqa: F722
+        preds: Tensor[[N, 6]],
+        targets: Tensor[[N, 6]],
         /,
-    ) -> Float[Tensor, "n"]:  # noqa: F821, UP037
+    ) -> Tensor[[N]]:
         """Evaluate a custom unreduced box loss or matching cost.
 
         Args:

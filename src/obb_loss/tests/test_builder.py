@@ -2,6 +2,7 @@
 
 import pytest
 import torch
+import torch.testing
 from torch import Tensor, nn
 from typing_extensions import override
 
@@ -21,7 +22,8 @@ class TrainableBoxTerm(nn.Module):
         self.register_buffer("bias", torch.tensor(0.0))
 
     @override
-    def forward(self, preds: Tensor, targets: Tensor) -> Tensor:
+    # Torch stubs declare variadic forward; this module intentionally narrows it.
+    def forward(self, preds: Tensor, targets: Tensor) -> Tensor:  # pyrefly: ignore[bad-override]
         """Return unreduced center residuals without geometry mutation."""
         return (preds[:, 0] - targets[:, 0]).square() * self.scale
 
@@ -56,8 +58,18 @@ def test_module_registration_and_weighting(
     assert "term_center.function.scale" in criterion.state_dict()
     assert "term_center.function.bias" in criterion.state_dict()
     assert list(criterion.parameters()) == [component.scale]
+    observed: list[Tensor] = []
+
+    def observe(module: nn.Module, inputs: tuple[Tensor, ...], output: Tensor) -> None:
+        """Record the custom module hook to verify evaluation uses Module.__call__."""
+        assert module is component
+        assert len(inputs) == 2
+        observed.append(output)
+
+    component.register_forward_hook(observe)
     loss = criterion.checked(preds, targets)
     assert isinstance(loss, Ok)
+    assert len(observed) == 1
     expected = ((preds.boxes[:, 0] - targets.boxes[:, 0]).square() * 12).sum()
     torch.testing.assert_close(loss.value, expected)
     loss.value.backward()

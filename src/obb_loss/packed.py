@@ -3,15 +3,12 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import TYPE_CHECKING, NamedTuple
+from typing import NamedTuple
 
 import torch
 from torch import Tensor
 
 from obb_loss.result import Err, Ok, Result
-
-if TYPE_CHECKING:
-    from jaxtyping import Float, Int
 
 
 class ErrorKind(Enum):
@@ -55,9 +52,8 @@ class PackedBoxes(NamedTuple):
             ending at count; repeated offsets retain empty samples.
     """
 
-    # Jaxtyping dimensions are strings, not Python expressions.
-    boxes: Float[Tensor, "n 6"]  # noqa: F722
-    cu_seqlens: Int[Tensor, "bp1"]  # noqa: F821, UP037
+    boxes: Tensor[[int, 6]]
+    cu_seqlens: Tensor[[int]]
 
 
 def validate_geometry(
@@ -150,7 +146,7 @@ def make_packed_boxes(
             return Ok(PackedBoxes(boxes, cu_seqlens))
 
 
-def sample_indices(packed: PackedBoxes) -> Int[Tensor, "n"]:  # noqa: F821, UP037
+def sample_indices(packed: PackedBoxes) -> Tensor[[int]]:
     """Map packed boxes to their owning samples.
 
     Args:

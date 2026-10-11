@@ -15,8 +15,6 @@ from obb_loss.result import Err, Ok, Result
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from jaxtyping import Float, Int
-
 
 class PackedPredictions(NamedTuple):
     """Borrow one decoder layer of packed geometry and class logits.
@@ -28,7 +26,7 @@ class PackedPredictions(NamedTuple):
     """
 
     geometry: PackedBoxes
-    logits: Float[Tensor, "n c"]  # noqa: F722
+    logits: Tensor[[int, int]]
 
 
 class PackedTargets(NamedTuple):
@@ -43,8 +41,8 @@ class PackedTargets(NamedTuple):
     """
 
     geometry: PackedBoxes
-    labels: Int[Tensor, "m"]  # noqa: F821, UP037
-    quality: Float[Tensor, "m"]  # noqa: F821, UP037
+    labels: Tensor[[int]]
+    quality: Tensor[[int]]
 
 
 class TargetSample(NamedTuple):
@@ -58,9 +56,9 @@ class TargetSample(NamedTuple):
             caller, aligned with boxes.
     """
 
-    boxes: Float[Tensor, "m 6"]  # noqa: F722
-    labels: Int[Tensor, "m"]  # noqa: F821, UP037
-    quality: Float[Tensor, "m"]  # noqa: F821, UP037
+    boxes: Tensor[[int, 6]]
+    labels: Tensor[[int]]
+    quality: Tensor[[int]]
 
 
 def make_packed_predictions(

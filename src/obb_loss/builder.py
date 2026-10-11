@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING, NamedTuple, assert_never, cast
+from typing import TYPE_CHECKING, NamedTuple, assert_never
 
 import torch
 from torch import Tensor, nn
@@ -33,7 +33,7 @@ class TermSpec(NamedTuple):
     """Keep serializable settings separate from live function/module references."""
 
     name: str
-    function: BoxFunction | nn.Module
+    function: BoxFunction
     weight: float
 
 
@@ -65,11 +65,11 @@ class BoxTerm(nn.Module):
             The callback tensor before weighting or reduction; custom callback failures
             propagate.
         """
-        # nn.Module.__call__ lacks the signature required by custom box terms.
-        return cast("BoxFunction", self.function)(preds, targets)
+        return self.function(preds, targets)
 
     @override
-    def forward(self, preds: Tensor, targets: Tensor) -> Tensor:
+    # Torch stubs declare variadic forward; this module intentionally narrows it.
+    def forward(self, preds: Tensor, targets: Tensor) -> Tensor:  # pyrefly: ignore[bad-override]
         """Evaluate and weight a trusted box term.
 
         A callback returning a non-tensor violates the trusted contract and raises TypeError.
@@ -112,7 +112,8 @@ class CompositeBoxLoss(nn.Module):
             self.add_module("term_" + spec.name, term)
 
     @override
-    def forward(self, preds: PackedBoxes, targets: PackedBoxes) -> Tensor:
+    # Torch stubs declare variadic forward; this module intentionally narrows it.
+    def forward(self, preds: PackedBoxes, targets: PackedBoxes) -> Tensor:  # pyrefly: ignore[bad-override]
         """Evaluate custom loss terms on aligned packed box pairs.
 
         Callbacks receive float64 [pairs, 6] tensors and return unreduced [pairs] losses. Inputs and callback contracts are trusted. Autocast is disabled locally. Custom code bugs propagate.
@@ -181,7 +182,7 @@ class BoxLossBuilder(NamedTuple):
     terms: tuple[TermSpec, ...] = ()
 
     def add(
-        self, name: str, function: BoxFunction | nn.Module, *, weight: float = 1.0
+        self, name: str, function: BoxFunction, *, weight: float = 1.0
     ) -> BoxLossBuilder:
         """Describe an additional named loss term without changing this builder.
 

@@ -15,7 +15,10 @@ from obb_loss.reduction import reduce_loss
 from obb_loss.result import Err, Ok, Result
 
 if TYPE_CHECKING:
-    from jaxtyping import Float
+    from shape_extensions import IntVar
+
+    N = IntVar("N")
+    C = IntVar("C")
 
     from obb_loss.packed import InputError
 
@@ -23,13 +26,13 @@ _DEFAULT_CONFIG = VFLConfig()
 
 
 def varifocal_loss(
-    logits: Float[Tensor, "n c"],  # noqa: F722
-    quality: Float[Tensor, "n c"],  # noqa: F722
+    logits: Tensor[[N, C]],
+    quality: Tensor[[N, C]],
     *,
     alpha: float = 0.75,
     gamma: float = 2.0,
     quality_weighted: bool = True,
-) -> Float[Tensor, "n c"]:  # noqa: F722
+) -> Tensor[[N, C]]:
     """Compute unreduced Varifocal loss with supplied quality targets.
 
     Inputs must share a CPU/CUDA device and be finite. Autocast is disabled locally. The logsigmoid form keeps fractional negative modulation finite at probability underflow.
@@ -74,7 +77,8 @@ class VarifocalLoss(nn.Module):
         self.config = config
 
     @override
-    def forward(self, logits: Tensor, quality: Tensor) -> Tensor:
+    # Torch stubs declare variadic forward; this module intentionally narrows it.
+    def forward(self, logits: Tensor, quality: Tensor) -> Tensor:  # pyrefly: ignore[bad-override]
         """Evaluate classification loss on trusted quality targets.
 
         Inputs must share a CPU/CUDA device and satisfy the pure function domain. A zero configured weight skips the loss computation. Use checked for recoverable validation failures.

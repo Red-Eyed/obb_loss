@@ -15,7 +15,10 @@ from obb_loss.reduction import reduce_loss
 from obb_loss.result import Err, Ok, Result
 
 if TYPE_CHECKING:
-    from jaxtyping import Float
+    from shape_extensions import IntVar
+
+    N = IntVar("N")
+    C = IntVar("C")
 
     from obb_loss.packed import InputError
 
@@ -23,11 +26,11 @@ _DEFAULT_CONFIG = QFLConfig()
 
 
 def quality_focal_loss(
-    logits: Float[Tensor, "n c"],  # noqa: F722
-    quality: Float[Tensor, "n c"],  # noqa: F722
+    logits: Tensor[[N, C]],
+    quality: Tensor[[N, C]],
     *,
     beta: float = 2.0,
-) -> Float[Tensor, "n c"]:  # noqa: F722
+) -> Tensor[[N, C]]:
     """Compute unreduced Quality Focal loss with supplied quality targets.
 
     Inputs must share a CPU/CUDA device and be finite. Autocast is disabled locally; target gradients remain connected. beta >=1 avoids singular gradients at equal quality.
@@ -67,7 +70,8 @@ class QualityFocalLoss(nn.Module):
         self.config = config
 
     @override
-    def forward(self, logits: Tensor, quality: Tensor) -> Tensor:
+    # Torch stubs declare variadic forward; this module intentionally narrows it.
+    def forward(self, logits: Tensor, quality: Tensor) -> Tensor:  # pyrefly: ignore[bad-override]
         """Evaluate classification loss on trusted quality targets.
 
         Inputs must share a CPU/CUDA device and satisfy the pure function domain. A zero configured weight skips the loss computation. Use checked for recoverable validation failures.

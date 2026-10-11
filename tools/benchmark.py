@@ -6,6 +6,7 @@ from time import perf_counter
 from typing import Annotated, TypeAlias
 
 import torch
+import torch.cuda
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, CliApp, SettingsConfigDict
 
@@ -126,7 +127,7 @@ def benchmark(settings: BenchmarkSettings) -> BenchmarkReport:
     return BenchmarkReport(
         timestamp=datetime.now(UTC),
         settings=settings,
-        torch_version=str(torch.__version__),
+        torch_version=torch.__version__,
         seconds=results,
         cost_bytes=costs.value.values.numel() * 8,
         cuda_peak_bytes=torch.cuda.max_memory_allocated(device)
