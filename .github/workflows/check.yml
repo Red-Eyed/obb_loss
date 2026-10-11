@@ -27,4 +27,5 @@ jobs:
       - run: uv run examples/matching.py
       - run: uv run examples/classification.py
       - run: uv run examples/custom_loss.py
+      - run: uv run examples/detr.py
       - run: uv build --wheel

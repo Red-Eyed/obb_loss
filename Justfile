@@ -19,6 +19,7 @@ examples:
     uv run examples/matching.py
     uv run examples/classification.py
     uv run examples/custom_loss.py
+    uv run examples/detr.py
 
 stress *args:
     uv run python -m tools.stress {{args}}
