@@ -13,11 +13,11 @@ and targets. Use `boxes_from_angles` to convert radians; no format inference occ
 ## Pack existing tensors
 
 ```python
+import obb_loss as obb
 import torch
-from obb_loss import Ok, Err, pack_boxes, pack_dense_boxes
 
 # Existing per-sample target tensors, including an empty sample.
-targets_result = pack_boxes(
+targets_result = obb.pack_boxes(
     [torch.tensor([[0., 0., 2., 1., 1., 0.]]), torch.empty(0, 6)],
     device=torch.device("cpu"),
     dtype=torch.float32,
@@ -25,7 +25,7 @@ targets_result = pack_boxes(
 # Dense detector output [batch, queries, 6] also has a helper.
 predictions = torch.tensor([[[0.1, 0., 2., 1., 1., 0.]],
                             [[0.2, 0., 2., 1., 1., 0.]]], requires_grad=True)
-preds_result = pack_dense_boxes(predictions)
+preds_result = obb.pack_dense_boxes(predictions)
 ```
 
 Helpers preserve gradients and sample boundaries, never mutate or silently transfer inputs,
@@ -36,19 +36,18 @@ for zero-sample input. `PackedBoxes.boxes` is `[total_boxes, 6]`; `cu_seqlens` i
 ## Match, then evaluate an aligned box loss
 
 ```python
-from obb_loss import HungarianMatcher, MatcherConfig, ProbIoULoss, ProbIoUConfig
-from obb_loss import Reduction, gather_matched
+import obb_loss as obb
 
 match (preds_result, targets_result):
-    case (Ok(value=preds), Ok(value=targets)):
-        matcher = HungarianMatcher(MatcherConfig(chunk_size=4096, max_pairs=1_000_000))
+    case (obb.Ok(value=preds), obb.Ok(value=targets)):
+        matcher = obb.HungarianMatcher(obb.MatcherConfig(chunk_size=4096, max_pairs=1_000_000))
         match matcher.forward(preds, targets):
-            case Ok(value=assignment):
-                matched_preds, matched_targets = gather_matched(preds, targets, assignment)
-                criterion = ProbIoULoss(ProbIoUConfig(reduction=Reduction.MEAN))
+            case obb.Ok(value=assignment):
+                matched_preds, matched_targets = obb.gather_matched(preds, targets, assignment)
+                criterion = obb.ProbIoULoss(obb.ProbIoUConfig(reduction=obb.Reduction.MEAN))
                 loss = criterion.forward(matched_preds, matched_targets)
                 loss.backward()
-            case Err(error=error):
+            case obb.Err(error=error):
                 print(error)
     case _:
         print("Packing failed; inspect the typed error outcome")
@@ -69,12 +68,12 @@ sample. See [matching contracts](docs/matching.md) for limits and solver referen
 ## Quality classification
 
 ```python
-from obb_loss import VarifocalLoss, VFLConfig, QualityFocalLoss, QFLConfig
+import obb_loss as obb
 
 logits = torch.tensor([[0.3, -0.8]], requires_grad=True)
 quality = torch.tensor([[0.7, 0.]])  # Caller-supplied [queries, classes], zero = negative.
-vfl = VarifocalLoss(VFLConfig(alpha=0.75, gamma=2., quality_weighted=True))
-qfl = QualityFocalLoss(QFLConfig(beta=2.))
+vfl = obb.VarifocalLoss(obb.VFLConfig(alpha=0.75, gamma=2., quality_weighted=True))
+qfl = obb.QualityFocalLoss(obb.QFLConfig(beta=2.))
 classification_loss = vfl.forward(logits, quality)  # Or qfl.forward(logits, quality).
 ```
 
@@ -87,18 +86,18 @@ classification target synthesis is included. See [loss papers and numerical poli
 ## Custom functions and typed settings
 
 ```python
+import obb_loss as obb
 from torch import Tensor
-from obb_loss import BoxLossBuilder, LossConfig, stable_probiou_loss, parse_config
 
 def center_loss(preds: Tensor, targets: Tensor) -> Tensor:
     """Return an unreduced center penalty for already aligned boxes."""
     return (preds[:, :2] - targets[:, :2]).square().sum(-1)
 
-builder = (BoxLossBuilder()
-           .add("probiou", stable_probiou_loss)
+builder = (obb.BoxLossBuilder()
+           .add("probiou", obb.stable_probiou_loss)
            .add("center", center_loss, weight=0.1))
-custom_result = builder.build(LossConfig(reduction=Reduction.MEAN))
-config_result = parse_config(ProbIoUConfig, {"weight": 2., "reduction": "sum"})
+custom_result = builder.build(obb.LossConfig(reduction=obb.Reduction.MEAN))
+config_result = obb.parse_config(obb.ProbIoUConfig, {"weight": 2., "reduction": "sum"})
 ```
 
 Functions receive float64 aligned tensors and return finite same-device `[pairs]` losses.

@@ -2,17 +2,7 @@
 
 import torch
 
-from obb_loss import (
-    Err,
-    HungarianMatcher,
-    MatcherConfig,
-    Ok,
-    ProbIoUConfig,
-    ProbIoULoss,
-    gather_matched,
-    pack_boxes,
-    pack_dense_boxes,
-)
+import obb_loss as obb
 
 
 def main() -> None:
@@ -24,36 +14,36 @@ def main() -> None:
         ],
         requires_grad=True,
     )
-    match pack_dense_boxes(predictions):
-        case Err(error=error):
+    match obb.pack_dense_boxes(predictions):
+        case obb.Err(error=error):
             print(error)
             return
-        case Ok(value=preds):
+        case obb.Ok(value=preds):
             pass
-    match pack_boxes(
+    match obb.pack_boxes(
         [torch.tensor([[0.0, 0.0, 2.0, 1.0, 1.0, 0.0]]), torch.empty(0, 6)],
         device=predictions.device,
         dtype=predictions.dtype,
     ):
-        case Err(error=error):
+        case obb.Err(error=error):
             print(error)
             return
-        case Ok(value=targets):
+        case obb.Ok(value=targets):
             pass
-    matcher = HungarianMatcher(MatcherConfig(chunk_size=16, max_pairs=100))
+    matcher = obb.HungarianMatcher(obb.MatcherConfig(chunk_size=16, max_pairs=100))
     match matcher.forward(preds, targets):
-        case Err(error=error):
+        case obb.Err(error=error):
             print(error)
             return
-        case Ok(value=assignment):
+        case obb.Ok(value=assignment):
             pass
-    matched_preds, matched_targets = gather_matched(preds, targets, assignment)
-    criterion = ProbIoULoss(ProbIoUConfig())
+    matched_preds, matched_targets = obb.gather_matched(preds, targets, assignment)
+    criterion = obb.ProbIoULoss(obb.ProbIoUConfig())
     match criterion.checked(matched_preds, matched_targets):
-        case Err(error=error):
+        case obb.Err(error=error):
             print(error)
             return
-        case Ok(value=loss):
+        case obb.Ok(value=loss):
             loss.backward()
     print(f"assignment offsets: {assignment.cu_seqlens.tolist()}")
     print(f"matched box loss: {loss.detach().item():.6f}")

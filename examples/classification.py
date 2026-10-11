@@ -2,7 +2,7 @@
 
 import torch
 
-from obb_loss import Err, Ok, QFLConfig, QualityFocalLoss, VarifocalLoss, VFLConfig
+import obb_loss as obb
 
 
 def main() -> None:
@@ -10,16 +10,16 @@ def main() -> None:
     logits = torch.tensor([[0.3, -0.8], [-0.2, 0.7]], requires_grad=True)
     quality = torch.tensor([[0.7, 0.0], [0.0, 0.9]])
     criteria = (
-        VarifocalLoss(VFLConfig(alpha=0.75, gamma=2.0, quality_weighted=True)),
-        QualityFocalLoss(QFLConfig(beta=2.0)),
+        obb.VarifocalLoss(obb.VFLConfig(alpha=0.75, gamma=2.0, quality_weighted=True)),
+        obb.QualityFocalLoss(obb.QFLConfig(beta=2.0)),
     )
     for criterion in criteria:
         logits.grad = None
         match criterion.checked(logits, quality):
-            case Err(error=error):
+            case obb.Err(error=error):
                 print(error)
                 return
-            case Ok(value=loss):
+            case obb.Ok(value=loss):
                 loss.backward()
         print(f"{type(criterion).__name__}: {loss.detach().item():.6f}")
         print(f"logit gradients: {logits.grad}")
