@@ -11,9 +11,8 @@ from typing_extensions import override
 
 from obb_loss.classification import validate_quality
 from obb_loss.config import QFLConfig, QFLParameters
-from obb_loss.reduction import reduce_loss, sum_samples
+from obb_loss.reduction import reduce_loss
 from obb_loss.result import Err, Ok, Result
-from obb_loss.set_context import matched_quality
 
 if TYPE_CHECKING:
     from shape_extensions import IntVar
@@ -22,30 +21,9 @@ if TYPE_CHECKING:
     C = IntVar("C")
 
     from obb_loss.packed import InputError
-    from obb_loss.set_context import SetLossContext
 
 _DEFAULT_CONFIG = QFLConfig()
 _DEFAULT_PARAMETERS = QFLParameters()
-
-
-def set_quality_focal_loss(
-    context: SetLossContext, *, config: QFLParameters = _DEFAULT_PARAMETERS
-) -> Result[Tensor[[int]], InputError]:
-    """Sum Quality Focal supervision over all query/classes within each sample.
-
-    Args:
-        context: Validated sets and assignment; caller quality supervises matched
-            labeled classes, and every other query/class is negative.
-        config: Immutable quality-error exponent, independent of weighting/reduction.
-
-    Returns:
-        Ok(float64 [samples] raw sums) retaining caller quality gradients; no
-        weighting, target-count normalization, or batch reduction is applied.
-    """
-    values = quality_focal_loss(
-        context.preds.logits, matched_quality(context), beta=config.beta
-    )
-    return Ok(sum_samples(values.sum(-1), context.preds.geometry.cu_seqlens))
 
 
 def quality_focal_loss(

@@ -26,7 +26,6 @@ jobs:
       - run: uv run pytest
       - run: uv run examples/matching.py
       - run: uv run examples/classification.py
-      - run: uv run examples/custom_loss.py
       - run: uv run examples/detr.py
       - run: uv run examples/custom_set_loss.py
       - run: uv build --wheel

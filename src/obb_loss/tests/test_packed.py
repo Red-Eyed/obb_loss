@@ -30,7 +30,7 @@ def test_list_empty_sample_order_and_gradients(boxes: Tensor) -> None:
     packed = outcome.value
     torch.testing.assert_close(packed.cu_seqlens, torch.tensor([0, 1, 1, 2]))
     torch.testing.assert_close(sample_indices(packed), torch.tensor([0, 2]))
-    packed.boxes.sum().backward()
+    packed.values.sum().backward()
     torch.testing.assert_close(boxes.grad, torch.ones_like(boxes))
 
 
@@ -52,7 +52,7 @@ def test_dense_adapter_matches_direct_record(boxes: Tensor) -> None:
     """Dense flattening uses the same packed convention and retains gradients."""
     outcome = pack_dense_boxes(rearrange(boxes, "b c -> b 1 c"))
     assert isinstance(outcome, Ok)
-    torch.testing.assert_close(outcome.value.boxes, boxes)
+    torch.testing.assert_close(outcome.value.values, boxes)
     torch.testing.assert_close(outcome.value.cu_seqlens, torch.tensor([0, 1, 2]))
 
 
@@ -63,7 +63,7 @@ def test_completely_empty(samples: int) -> None:
         [torch.empty(0, 6)] * samples, device=torch.device("cpu"), dtype=torch.float32
     )
     assert isinstance(outcome, Ok)
-    assert outcome.value.boxes.shape == (0, 6)
+    assert outcome.value.values.shape == (0, 6)
     assert outcome.value.cu_seqlens.shape == (samples + 1,)
     assert sample_indices(outcome.value).numel() == 0
 

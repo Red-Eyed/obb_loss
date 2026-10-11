@@ -10,14 +10,14 @@ import torch.testing
 from einops import rearrange
 from torch import Tensor
 
-from obb_loss.config import ProbIoUConfig, Reduction, parse_config
+from obb_loss.config import LossConfig, Reduction, parse_config
 from obb_loss.criterion import ProbIoULoss
 from obb_loss.losses.stable_probiou import (
     checked_probiou_loss,
     stable_probiou,
     stable_probiou_loss,
 )
-from obb_loss.packed import PackedBoxes
+from obb_loss.packed import PackedBatch
 from obb_loss.result import Err, Ok
 
 
@@ -139,10 +139,10 @@ def test_autocast_scope_and_packed_criterion(pair: tuple[Tensor, Tensor]) -> Non
     """Criterion preserves surrounding autocast and matches pure float64 results."""
     first, second = pair
     cu = torch.tensor([0, 1], device=first.device)
-    criterion = ProbIoULoss(ProbIoUConfig(reduction=Reduction.SUM, weight=2))
+    criterion = ProbIoULoss(LossConfig(reduction=Reduction.SUM, weight=2))
     with torch.autocast(first.device.type, dtype=torch.bfloat16):
         assert torch.is_autocast_enabled(first.device.type)
-        result = criterion.checked(PackedBoxes(first, cu), PackedBoxes(second, cu))
+        result = criterion.checked(PackedBatch(first, cu), PackedBatch(second, cu))
         assert torch.is_autocast_enabled(first.device.type)
     assert isinstance(result, Ok)
     torch.testing.assert_close(
@@ -150,8 +150,8 @@ def test_autocast_scope_and_packed_criterion(pair: tuple[Tensor, Tensor]) -> Non
     )
     assert isinstance(
         criterion.checked(
-            PackedBoxes(first, cu),
-            PackedBoxes(second, torch.tensor([0, 0, 1], device=first.device)),
+            PackedBatch(first, cu),
+            PackedBatch(second, torch.tensor([0, 0, 1], device=first.device)),
         ),
         Err,
     )
@@ -160,7 +160,7 @@ def test_autocast_scope_and_packed_criterion(pair: tuple[Tensor, Tensor]) -> Non
 def test_empty_criterion(device: torch.device) -> None:
     """Empty mean remains graph-connected and does not generate NaN."""
     boxes = torch.empty((0, 6), device=device).requires_grad_()
-    packed = PackedBoxes(boxes, torch.tensor([0, 0], device=device))
+    packed = PackedBatch(boxes, torch.tensor([0, 0], device=device))
     loss = ProbIoULoss().forward(packed, packed)
     assert loss.item() == 0
     loss.backward()
@@ -169,8 +169,8 @@ def test_empty_criterion(device: torch.device) -> None:
 
 def test_config_and_domain_rejection(pair: tuple[Tensor, Tensor]) -> None:
     """Recoverable config and numerical-domain failures are explicit results."""
-    assert isinstance(parse_config(ProbIoUConfig, {"weight": -1}), Err)
-    assert isinstance(parse_config(ProbIoUConfig, {"unexpected": 1}), Err)
+    assert isinstance(parse_config(LossConfig, {"weight": -1}), Err)
+    assert isinstance(parse_config(LossConfig, {"unexpected": 1}), Err)
     first, second = pair
     outside = first.detach().clone()
     outside[0, 3] = 1e-40

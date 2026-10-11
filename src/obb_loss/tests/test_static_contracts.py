@@ -98,13 +98,13 @@ def test_pytest_rejects_unknown_markers(tmp_path: Path) -> None:
 
 
 def test_set_criterion_requires_records_and_result_narrowing(tmp_path: Path) -> None:
-    """Reject box-only records and unchecked loss access in the high-level criterion."""
+    """Reject raw tensor arguments and unchecked loss access in the high-level criterion."""
     source = tmp_path / "set_contract.py"
     source.write_text(
         "import obb_loss as obb\n"
         "from torch import Tensor\n"
-        "def misuse(criterion: obb.SetCriterion, preds: obb.PackedPredictions, "
-        "targets: obb.PackedTargets, boxes: obb.PackedBoxes) -> Tensor:\n"
+        "def misuse(criterion: obb.SetCriterion, preds: obb.Predictions, "
+        "targets: obb.Targets, boxes: Tensor) -> Tensor:\n"
         "    criterion.forward(boxes, boxes)\n"
         "    return criterion.forward(preds, targets).total\n",
         encoding="utf-8",
@@ -179,37 +179,30 @@ def test_native_shapes_and_module_callbacks(tmp_path: Path) -> None:
     assert "bad-assignment" in diagnostics
 
 
-def test_set_callback_context_and_result_types(tmp_path: Path) -> None:
-    """Accept typed modules and reject wrong contexts or unchecked tensor callbacks."""
-    source = tmp_path / "set_callbacks.py"
+def test_set_subclass_contracts(tmp_path: Path) -> None:
+    """Accept typed subclass methods and reject incompatible overrides."""
+    source = tmp_path / "set_subclasses.py"
     valid = (
-        "from __future__ import annotations\n"
         "import obb_loss as obb\n"
-        "from torch import Tensor, nn\n"
+        "from torch import Tensor\n"
         "from typing_extensions import override\n"
-        "class Custom(nn.Module):\n"
+        "class Custom(obb.SetCriterion):\n"
         "    @override\n"
-        "    def forward(self, context: obb.SetLossContext) -> obb.Result[Tensor, obb.InputError]:  # pyrefly: ignore[bad-override]\n"
-        "        return obb.Ok(context.zero())\n"
-        "callback: obb.LossFunction[obb.SetLossContext] = Custom()\n"
-        "criterion = obb.SetCriterion(losses={'custom': obb.WeightedLoss(callback, obb.WeightConfig(weight=2))})\n"
+        "    def classification_quality(self, preds: obb.Predictions, targets: obb.Targets, assignment: obb.Assignment) -> obb.Result[Tensor, obb.InputError]:\n"
+        "        return obb.Ok(preds.boxes.values[:, 0])\n"
+        "criterion = Custom(obb.SetCriterionConfig())\n"
     )
     source.write_text(valid, encoding="utf-8")
     command = [sys.executable, "-m", "tools.typecheck", str(source)]
     result = subprocess.run(command, capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stdout + result.stderr
     source.write_text(
-        valid
-        + "def naked(context: obb.SetLossContext) -> Tensor:\n"
-        + "    return context.zero()\n"
-        + "bad: obb.LossFunction[obb.SetLossContext] = naked\n"
-        + "def cost(context: obb.SetCostContext) -> obb.Result[Tensor, obb.InputError]:\n"
-        + "    return obb.Ok(context.zero())\n"
-        + "wrong_context = obb.SetCriterion(losses={'cost': cost})\n",
+        valid + "class Wrong(obb.SetCriterion):\n"
+        "    @override\n"
+        "    def classification_quality(self, preds: int, targets: int, assignment: int) -> Tensor:\n"
+        "        return Tensor()\n",
         encoding="utf-8",
     )
     result = subprocess.run(command, capture_output=True, text=True, check=False)
-    diagnostics = result.stdout + result.stderr
     assert result.returncode != 0
-    assert "bad-assignment" in diagnostics
-    assert "dict value type `LossFunction[SetLossContext]`" in diagnostics
+    assert "bad-override" in result.stdout + result.stderr

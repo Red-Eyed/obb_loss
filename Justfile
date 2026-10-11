@@ -18,7 +18,6 @@ test:
 examples:
     uv run examples/matching.py
     uv run examples/classification.py
-    uv run examples/custom_loss.py
     uv run examples/detr.py
     uv run examples/custom_set_loss.py
 

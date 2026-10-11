@@ -4,7 +4,7 @@ import torch
 import torch.testing
 
 from obb_loss.criterion import ProbIoULoss
-from obb_loss.packed import PackedBoxes
+from obb_loss.packed import PackedBatch
 
 
 def test_fullgraph_compiled_criterion_dynamic_sizes() -> None:
@@ -22,7 +22,7 @@ def test_fullgraph_compiled_criterion_dynamic_sizes() -> None:
         second = first.detach().clone()
         second[:, 0] = 0
         cu = torch.tensor([0, count])
-        packed1, packed2 = PackedBoxes(first, cu), PackedBoxes(second, cu)
+        packed1, packed2 = PackedBatch(first, cu), PackedBatch(second, cu)
         actual = compiled(packed1, packed2)
         expected = criterion.forward(packed1, packed2)
         torch.testing.assert_close(actual, expected)

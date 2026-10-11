@@ -38,7 +38,7 @@ def main() -> None:
         case obb.Ok(value=assignment):
             pass
     matched_preds, matched_targets = obb.gather_matched(preds, targets, assignment)
-    criterion = obb.ProbIoULoss(obb.ProbIoUConfig())
+    criterion = obb.ProbIoULoss(obb.LossConfig())
     match criterion.checked(matched_preds, matched_targets):
         case obb.Err(error=error):
             print(error)

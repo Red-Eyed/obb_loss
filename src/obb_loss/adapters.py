@@ -6,7 +6,7 @@ import torch
 from einops import rearrange
 from torch import Tensor
 
-from obb_loss.packed import ErrorKind, InputError, PackedBoxes, make_packed_boxes
+from obb_loss.packed import ErrorKind, InputError, PackedBatch, make_packed_boxes
 from obb_loss.result import Err, Ok, Result
 
 
@@ -15,7 +15,7 @@ def pack_boxes(
     *,
     device: torch.device,
     dtype: torch.dtype,
-) -> Result[PackedBoxes, InputError]:
+) -> Result[PackedBatch, InputError]:
     """Pack variable-length box tensors in sample order.
 
     Concatenation preserves autograd and never mutates input tensors.
@@ -29,7 +29,7 @@ def pack_boxes(
             implicit conversion.
 
     Returns:
-        Ok(PackedBoxes) with newly concatenated geometry and int64 offsets, or
+        Ok(PackedBatch) with newly concatenated geometry and int64 offsets, or
         Err(InputError) for invalid shape, geometry, device, or dtype.
     """
     counts = [0]
@@ -52,7 +52,7 @@ def pack_boxes(
     return make_packed_boxes(values, cu)
 
 
-def pack_dense_boxes(boxes: Tensor) -> Result[PackedBoxes, InputError]:
+def pack_dense_boxes(boxes: Tensor) -> Result[PackedBatch, InputError]:
     """Pack dense decoder box outputs in sample/query order.
 
     Autograd is preserved. Packing borrows a view when strides allow and otherwise copies.
@@ -62,7 +62,7 @@ def pack_dense_boxes(boxes: Tensor) -> Result[PackedBoxes, InputError]:
             sin(theta)) order, with positive sides and nonzero directions.
 
     Returns:
-        Ok(PackedBoxes) with [batch * queries, 6] geometry and regular sample
+        Ok(PackedBatch) with [batch * queries, 6] geometry and regular sample
         offsets, or Err(InputError) for invalid inputs.
     """
     if boxes.ndim != 3 or boxes.shape[2] != 6:

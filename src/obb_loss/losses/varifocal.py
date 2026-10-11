@@ -11,9 +11,8 @@ from typing_extensions import override
 
 from obb_loss.classification import validate_quality
 from obb_loss.config import VFLConfig, VFLParameters
-from obb_loss.reduction import reduce_loss, sum_samples
+from obb_loss.reduction import reduce_loss
 from obb_loss.result import Err, Ok, Result
-from obb_loss.set_context import matched_quality
 
 if TYPE_CHECKING:
     from shape_extensions import IntVar
@@ -22,34 +21,9 @@ if TYPE_CHECKING:
     C = IntVar("C")
 
     from obb_loss.packed import InputError
-    from obb_loss.set_context import SetLossContext
 
 _DEFAULT_CONFIG = VFLConfig()
 _DEFAULT_PARAMETERS = VFLParameters()
-
-
-def set_varifocal_loss(
-    context: SetLossContext, *, config: VFLParameters = _DEFAULT_PARAMETERS
-) -> Result[Tensor[[int]], InputError]:
-    """Sum Varifocal supervision over all query/classes within each sample.
-
-    Args:
-        context: Validated sets and assignment; caller quality supervises matched
-            labeled classes, and every other query/class is negative.
-        config: Immutable modulation parameters, independent of weighting/reduction.
-
-    Returns:
-        Ok(float64 [samples] raw sums); caller quality gradients are preserved.
-        Weighting, target-count normalization, and reduction belong to composition.
-    """
-    values = varifocal_loss(
-        context.preds.logits,
-        matched_quality(context),
-        alpha=config.alpha,
-        gamma=config.gamma,
-        quality_weighted=config.quality_weighted,
-    )
-    return Ok(sum_samples(values.sum(-1), context.preds.geometry.cu_seqlens))
 
 
 def varifocal_loss(

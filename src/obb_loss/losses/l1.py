@@ -6,15 +6,9 @@ from typing import TYPE_CHECKING
 
 import torch
 
-from obb_loss.reduction import sum_samples
-from obb_loss.result import Ok, Result
-
 if TYPE_CHECKING:
     from shape_extensions import IntVar
     from torch import Tensor
-
-    from obb_loss.packed import InputError
-    from obb_loss.set_context import SetCostContext, SetLossContext
 
     N = IntVar("N")
 
@@ -40,35 +34,3 @@ def box_l1_loss(
     """
     with torch.autocast(preds.device.type, enabled=False):
         return (preds[:, :4].double() - targets[:, :4].double()).abs().sum(dim=-1)
-
-
-def set_l1_loss(context: SetLossContext) -> Result[Tensor[[int]], InputError]:
-    """Sum matched center/side L1 errors within each sample.
-
-    Args:
-        context: Validated sets and gathered pairs; direction is excluded and shared
-            coordinate units determine the error scale.
-
-    Returns:
-        Ok(float64 [samples] raw sums), including connected zeros for empty samples.
-        Weighting, normalization, and reduction are not applied.
-    """
-    values = box_l1_loss(context.matched_preds.boxes, context.matched_targets.boxes)
-    return Ok(sum_samples(values, context.assignment.cu_seqlens))
-
-
-def set_l1_cost(context: SetCostContext) -> Result[Tensor[[int]], InputError]:
-    """Compute center/side L1 for each bounded candidate pair.
-
-    Args:
-        context: Validated sets and aligned global query/reference indices in shared units.
-
-    Returns:
-        Ok(float64 [pairs] unweighted L1 values), excluding direction coordinates.
-    """
-    return Ok(
-        box_l1_loss(
-            context.preds.geometry.boxes[context.pred_indices],
-            context.targets.geometry.boxes[context.target_indices],
-        )
-    )

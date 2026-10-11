@@ -1,12 +1,14 @@
 """Use one set criterion per DETR decoder layer and aggregate losses in the caller."""
 
-from functools import partial
 from typing import NamedTuple
 
 import torch
 from torch import Tensor
+from typing_extensions import override
 
 import obb_loss as obb
+
+_VFL_PARAMETERS = obb.VFLParameters(alpha=0.75, gamma=2)
 
 
 class DecoderOutput(NamedTuple):
@@ -18,7 +20,7 @@ class DecoderOutput(NamedTuple):
 
 def layer_loss(
     output: DecoderOutput,
-    targets: obb.PackedTargets,
+    targets: obb.Targets,
     criterion: obb.SetCriterion,
 ) -> obb.Result[obb.SetLosses, obb.InputError]:
     """Adapt one dense decoder output and let the criterion match and supervise it."""
@@ -30,12 +32,26 @@ def layer_loss(
                 preds,
                 targets,
                 reduction=obb.Reduction.NONE,
-                normalizer=obb.TargetCount.PER_SAMPLE,
             )
 
 
+class DetectorCriterion(obb.SetCriterion):
+    """Choose detached localization quality for classification supervision."""
+
+    @override
+    def classification_quality(
+        self,
+        preds: obb.Predictions,
+        targets: obb.Targets,
+        assignment: obb.Assignment,
+    ) -> obb.Result[Tensor, obb.InputError]:
+        """Return this layer's matched ProbIoU scores without quality gradients."""
+        first, second = obb.gather_matched(preds.boxes, targets.boxes, assignment)
+        return obb.Ok(obb.stable_probiou(first.values, second.values).detach())
+
+
 def main() -> None:
-    """Train final and auxiliary outputs against caller-supplied labels and quality."""
+    """Train decoder layers with caller-selected quality computed after matching."""
     boxes = torch.tensor(
         [
             [[0.1, 0.0, 2.0, 1.0, 1.0, 0.0], [3.0, 0.0, 2.0, 1.0, 1.0, 0.0]],
@@ -51,13 +67,9 @@ def main() -> None:
     match obb.pack_targets(
         [
             obb.TargetSample(
-                torch.tensor([[0.0, 0.0, 2.0, 1.0, 1.0, 0.0]]),
-                torch.tensor([1]),
-                torch.tensor([0.8]),
+                torch.tensor([[0.0, 0.0, 2.0, 1.0, 1.0, 0.0]]), torch.tensor([1])
             ),
-            obb.TargetSample(
-                torch.empty(0, 6), torch.empty(0, dtype=torch.int64), torch.empty(0)
-            ),
+            obb.TargetSample(torch.empty(0, 6), torch.empty(0, dtype=torch.int64)),
         ],
         device=boxes.device,
         dtype=boxes.dtype,
@@ -67,28 +79,14 @@ def main() -> None:
             return
         case obb.Ok(value=targets):
             pass
-    criterion = obb.SetCriterion(
-        matcher=obb.SetHungarianMatcher(
-            obb.MatcherConfig(chunk_size=128, max_pairs=10000),
-            costs={
-                "classification": obb.WeightedLoss(
-                    obb.set_classification_cost, obb.WeightConfig(weight=2)
-                ),
-                "l1": obb.WeightedLoss(obb.set_l1_cost, obb.WeightConfig(weight=5)),
-                "probiou": obb.WeightedLoss(
-                    obb.set_probiou_cost, obb.WeightConfig(weight=2)
-                ),
-            },
-        ),
-        losses={
-            "classification": partial(
-                obb.set_varifocal_loss, config=obb.VFLParameters(alpha=0.75, gamma=2)
+    criterion = DetectorCriterion(
+        obb.SetCriterionConfig(
+            matcher=obb.MatcherConfig(
+                classification_weight=2, chunk_size=128, max_pairs=10000
             ),
-            "l1": obb.WeightedLoss(obb.set_l1_loss, obb.WeightConfig(weight=5)),
-            "probiou": obb.WeightedLoss(
-                obb.set_probiou_loss, obb.WeightConfig(weight=2)
-            ),
-        },
+            normalizer=obb.TargetCount.PER_SAMPLE,
+            vfl=_VFL_PARAMETERS,
+        )
     )
     total = boxes.double().sum() * 0
     for index, output in enumerate(outputs):

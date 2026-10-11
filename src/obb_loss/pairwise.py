@@ -8,7 +8,7 @@ import torch
 from torch import Tensor
 
 from obb_loss.losses.stable_probiou import stable_probiou_loss, validate_pair_domain
-from obb_loss.packed import ErrorKind, InputError, PackedBoxes, make_packed_boxes
+from obb_loss.packed import ErrorKind, InputError, PackedBatch, make_packed_boxes
 from obb_loss.result import Err, Ok, Result
 
 if TYPE_CHECKING:
@@ -83,7 +83,7 @@ def validate_output(
 
 
 def cost_blocks(
-    preds: PackedBoxes, targets: PackedBoxes, limit: int
+    preds: PackedBatch, targets: PackedBatch, limit: int
 ) -> Result[tuple[CostBlock, ...], InputError]:
     """Describe bounded rectangular cost storage for each sample.
 
@@ -102,7 +102,7 @@ def cost_blocks(
     """
     if (
         preds.cu_seqlens.shape != targets.cu_seqlens.shape
-        or preds.boxes.device != targets.boxes.device
+        or preds.values.device != targets.values.device
     ):
         return Err(
             InputError(ErrorKind.ALIGNMENT, "batch", "sample count/device must match")
@@ -131,8 +131,8 @@ def cost_blocks(
 def _fill_block(
     output: Tensor,
     block: CostBlock,
-    preds: PackedBoxes,
-    targets: PackedBoxes,
+    preds: PackedBatch,
+    targets: PackedBatch,
     function: BoxFunction,
     chunk_size: int,
 ) -> Result[Tensor, InputError]:
@@ -142,8 +142,8 @@ def _fill_block(
         index = torch.arange(
             start - block.start, end - block.start, device=output.device
         )
-        first = preds.boxes[block.pred_start + index // block.columns]
-        second = targets.boxes[block.target_start + index % block.columns]
+        first = preds.values[block.pred_start + index // block.columns]
+        second = targets.values[block.target_start + index % block.columns]
         match validate_pair_domain(first, second):
             case Err() as failure:
                 return failure
@@ -159,8 +159,8 @@ def _fill_block(
 
 
 def pairwise_costs(
-    preds: PackedBoxes,
-    targets: PackedBoxes,
+    preds: PackedBatch,
+    targets: PackedBatch,
     config: MatcherConfig,
     function: BoxFunction = stable_probiou_loss,
 ) -> Result[PackedCosts, InputError]:
@@ -194,7 +194,7 @@ def pairwise_costs(
         case Ok(value=blocks):
             pass
     total = blocks[-1].end if blocks else 0
-    output = torch.empty(total, device=preds.boxes.device, dtype=torch.float64)
+    output = torch.empty(total, device=preds.values.device, dtype=torch.float64)
     for block in blocks:
         match _fill_block(output, block, preds, targets, function, config.chunk_size):
             case Err() as failure:

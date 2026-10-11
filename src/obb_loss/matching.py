@@ -15,7 +15,7 @@ from typing_extensions import override
 
 from obb_loss.config import MatcherConfig
 from obb_loss.losses.stable_probiou import stable_probiou_loss
-from obb_loss.packed import InputError, PackedBoxes
+from obb_loss.packed import InputError, PackedBatch
 from obb_loss.pairwise import pairwise_costs
 from obb_loss.result import Err, Ok, Result
 from obb_loss.solver import solve_costs
@@ -68,7 +68,7 @@ class HungarianMatcher(nn.Module):
     @override
     # Torch stubs declare variadic forward; this module intentionally narrows it.
     def forward(  # pyrefly: ignore[bad-override]
-        self, preds: PackedBoxes, targets: PackedBoxes
+        self, preds: PackedBatch, targets: PackedBatch
     ) -> Result[Assignment, InputError]:
         """Find independent minimum-cost assignments within each sample.
 
@@ -92,8 +92,8 @@ class HungarianMatcher(nn.Module):
 
 
 def gather_matched(
-    preds: PackedBoxes, targets: PackedBoxes, assignment: Assignment
-) -> tuple[PackedBoxes, PackedBoxes]:
+    preds: PackedBatch, targets: PackedBatch, assignment: Assignment
+) -> tuple[PackedBatch, PackedBatch]:
     """Gather paired packed geometry while preserving gradients.
 
     This trusted helper does not validate arbitrary indices or assignments.
@@ -106,9 +106,9 @@ def gather_matched(
             these records.
 
     Returns:
-        Prediction and target PackedBoxes in paired order, sharing assignment
+        Prediction and target PackedBatch in paired order, sharing assignment
         offsets; geometry is newly gathered and differentiable.
     """
-    return PackedBoxes(
-        preds.boxes[assignment.pred_indices], assignment.cu_seqlens
-    ), PackedBoxes(targets.boxes[assignment.target_indices], assignment.cu_seqlens)
+    return PackedBatch(
+        preds.values[assignment.pred_indices], assignment.cu_seqlens
+    ), PackedBatch(targets.values[assignment.target_indices], assignment.cu_seqlens)

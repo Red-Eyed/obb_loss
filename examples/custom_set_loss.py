@@ -1,77 +1,60 @@
-"""Add a caller-defined direction constraint to the standard set loss callbacks."""
+"""Extend a configured criterion with an all-query direction regularizer."""
+
+from collections.abc import Mapping
 
 import torch
 from torch import Tensor
+from typing_extensions import override
 
 import obb_loss as obb
 
 
-def direction_penalty(
-    context: obb.SetLossContext,
-) -> obb.Result[Tensor, obb.InputError]:
-    """Penalize nonunit directions on every query, including unmatched queries.
+class DirectionCriterion(obb.SetCriterion):
+    """Add a unit-direction penalty, including unmatched queries."""
 
-    Args:
-        context: Validated packed sets; predictions store (cos(theta), sin(theta))
-            in the last two coordinates. No target or assignment is needed here.
+    @override
+    def compute_losses(
+        self,
+        preds: obb.Predictions,
+        targets: obb.Targets,
+        assignment: obb.Assignment,
+    ) -> obb.Result[Mapping[str, Tensor], obb.InputError]:
+        """Retain configured box losses and add weighted per-sample direction sums.
 
-    Returns:
-        Ok(float64 raw per-sample sums of (cos² + sin² - 1)²), without weighting,
-        target-count normalization, or batch reduction.
-    """
-    directions = context.preds.geometry.boxes[:, 4:6].double()
-    values = (directions.square().sum(-1) - 1).square()
-    return obb.Ok(obb.sum_samples(values, context.preds.geometry.cu_seqlens))
+        Args:
+            preds: All queries; the regularizer also supervises unmatched boxes.
+            targets: Packed reference geometry and class labels.
+            assignment: Matches selected for the built-in box terms.
+        """
+        match super().compute_losses(preds, targets, assignment):
+            case obb.Err() as failure:
+                return failure
+            case obb.Ok(value=terms):
+                residual = preds.boxes.values[:, 4:6].double().square().sum(-1) - 1
+                direction = obb.sum_samples(residual.square(), preds.boxes.cu_seqlens)
+                return obb.Ok({**terms, "direction": 0.5 * direction})
 
 
 def main() -> None:
-    """Compose built-ins and a custom callback, then inspect its gradient."""
-    boxes = torch.tensor(
-        [[[0.1, 0, 2, 1, 1.2, 0], [3, 0, 2, 1, 0, 0.5]]], requires_grad=True
+    """Backpropagate a subclass-defined term through packed predictions."""
+    boxes = torch.tensor([[0.1, 0, 2, 1, 1, 0], [4, 0, 2, 1, 2, 0]], requires_grad=True)
+    offsets = torch.tensor([0, 2])
+    preds = obb.Predictions(
+        obb.PackedBatch(boxes, offsets), torch.zeros(2, 1, requires_grad=True)
     )
-    logits = torch.zeros(1, 2, 2, requires_grad=True)
-    match obb.pack_predictions(boxes, logits):
-        case obb.Err(error=error):
-            print(error)
-            return
-        case obb.Ok(value=preds):
-            pass
-    match obb.pack_targets(
-        [
-            obb.TargetSample(
-                torch.tensor([[0, 0, 2, 1, 1, 0]], dtype=boxes.dtype),
-                torch.tensor([0]),
-                torch.tensor([0.8]),
-            )
-        ],
-        device=boxes.device,
-        dtype=boxes.dtype,
-    ):
-        case obb.Err(error=error):
-            print(error)
-            return
-        case obb.Ok(value=targets):
-            pass
-    criterion = obb.SetCriterion(
-        losses={
-            **obb.default_set_losses(),
-            "direction": obb.WeightedLoss(
-                direction_penalty, obb.WeightConfig(weight=0.5)
-            ),
-        },
+    targets = obb.Targets(
+        obb.PackedBatch(torch.tensor([[0.0, 0, 2, 1, 1, 0]]), torch.tensor([0, 1])),
+        torch.tensor([0]),
     )
-    match criterion(preds, targets, reduction=obb.Reduction.NONE, normalizer=1.0):
+    criterion = DirectionCriterion(obb.SetCriterionConfig(classification="none"))
+    match criterion(preds, targets):
         case obb.Err(error=error):
             print(error)
-            return
         case obb.Ok(value=losses):
-            losses.total.sum().backward()
+            losses.total.backward()
             assert boxes.grad is not None
-            assert boxes.grad[0, 1, 5].item() != 0
-            print(
-                {name: value.detach().tolist() for name, value in losses.terms.items()}
-            )
-            print("The custom constraint also supervises the unmatched query.")
+            assert boxes.grad[1, 4].item() != 0
+            print({name: value.item() for name, value in losses.terms.items()})
 
 
 if __name__ == "__main__":

@@ -13,13 +13,13 @@ from obb_loss.config import MatcherConfig
 from obb_loss.criterion import ProbIoULoss
 from obb_loss.losses.stable_probiou import stable_probiou_loss
 from obb_loss.matching import HungarianMatcher, gather_matched
-from obb_loss.packed import PackedBoxes
+from obb_loss.packed import PackedBatch
 from obb_loss.pairwise import pairwise_costs
 from obb_loss.result import Err, Ok
 
 
 @pytest.fixture
-def matching_pair(device: torch.device) -> tuple[PackedBoxes, PackedBoxes]:
+def matching_pair(device: torch.device) -> tuple[PackedBatch, PackedBatch]:
     """Create irregular two-sample geometry with one empty target sample."""
     first = torch.tensor(
         [
@@ -35,13 +35,13 @@ def matching_pair(device: torch.device) -> tuple[PackedBoxes, PackedBoxes]:
     second = torch.tensor(
         [[2.1, 0, 2, 1, 1, 0], [0.1, 0, 2, 1, 1, 0]], device=device, dtype=torch.float64
     )
-    return PackedBoxes(first, torch.tensor([0, 3, 4], device=device)), PackedBoxes(
+    return PackedBatch(first, torch.tensor([0, 3, 4], device=device)), PackedBatch(
         second, torch.tensor([0, 2, 2], device=device)
     )
 
 
 def test_assignment_brute_force_and_gradient_gather(
-    matching_pair: tuple[PackedBoxes, PackedBoxes],
+    matching_pair: tuple[PackedBatch, PackedBatch],
 ) -> None:
     """Optimal cost equals exhaustive rectangular assignment; gather retains autograd."""
     preds, targets = matching_pair
@@ -49,11 +49,11 @@ def test_assignment_brute_force_and_gradient_gather(
     assert isinstance(outcome, Ok)
     assignment = outcome.value
     torch.testing.assert_close(
-        assignment.cu_seqlens, torch.tensor([0, 2, 2], device=preds.boxes.device)
+        assignment.cu_seqlens, torch.tensor([0, 2, 2], device=preds.values.device)
     )
     costs = stable_probiou_loss(
-        rearrange(preds.boxes[:3], "n c -> n 1 c"),
-        rearrange(targets.boxes, "m c -> 1 m c"),
+        rearrange(preds.values[:3], "n c -> n 1 c"),
+        rearrange(targets.values, "m c -> 1 m c"),
     )
     optimal = min(
         sum(costs[row, column].item() for column, row in enumerate(rows))
@@ -68,16 +68,16 @@ def test_assignment_brute_force_and_gradient_gather(
     assert not assignment.pred_indices.requires_grad
     aligned = gather_matched(preds, targets, assignment)
     ProbIoULoss().forward(*aligned).backward()
-    assert preds.boxes.grad is not None
-    assert torch.isfinite(preds.boxes.grad).all()
+    assert preds.values.grad is not None
+    assert torch.isfinite(preds.values.grad).all()
     torch.testing.assert_close(
-        preds.boxes.grad[3],
-        torch.zeros(6, device=preds.boxes.device, dtype=torch.float64),
+        preds.values.grad[3],
+        torch.zeros(6, device=preds.values.device, dtype=torch.float64),
     )
 
 
 def test_chunk_limit_and_cost_reference(
-    matching_pair: tuple[PackedBoxes, PackedBoxes],
+    matching_pair: tuple[PackedBatch, PackedBatch],
 ) -> None:
     """No callback invocation exceeds chunk_size; packed costs match dense oracle."""
     preds, targets = matching_pair
@@ -93,8 +93,8 @@ def test_chunk_limit_and_cost_reference(
     assert sizes == [2, 2, 2]
     assert outcome.value.blocks[1].start == outcome.value.blocks[1].end
     reference = stable_probiou_loss(
-        rearrange(preds.boxes[:3], "n c -> n 1 c"),
-        rearrange(targets.boxes, "m c -> 1 m c"),
+        rearrange(preds.values[:3], "n c -> n 1 c"),
+        rearrange(targets.values, "m c -> 1 m c"),
     )
     torch.testing.assert_close(
         outcome.value.values, rearrange(reference, "n m -> (n m)")
@@ -103,7 +103,7 @@ def test_chunk_limit_and_cost_reference(
 
 
 def test_more_targets_than_queries(
-    matching_pair: tuple[PackedBoxes, PackedBoxes],
+    matching_pair: tuple[PackedBatch, PackedBatch],
 ) -> None:
     """Rectangular matching assigns the smaller side without dropping sample identity."""
     first, second = matching_pair
@@ -135,14 +135,14 @@ def test_sample_isolation(device: torch.device) -> None:
     targets = preds.flip(0)
     cu = torch.tensor([0, 1, 2], device=device)
     result = HungarianMatcher().forward(
-        PackedBoxes(preds, cu), PackedBoxes(targets, cu)
+        PackedBatch(preds, cu), PackedBatch(targets, cu)
     )
     assert isinstance(result, Ok)
     torch.testing.assert_close(result.value.pred_indices, result.value.target_indices)
 
 
 def test_callback_shape_rejection(
-    matching_pair: tuple[PackedBoxes, PackedBoxes],
+    matching_pair: tuple[PackedBatch, PackedBatch],
 ) -> None:
     """A typed callable's invalid runtime shape is a recoverable contract failure."""
 

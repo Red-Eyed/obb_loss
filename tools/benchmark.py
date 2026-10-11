@@ -14,7 +14,7 @@ from obb_loss import (
     Assignment,
     HungarianMatcher,
     MatcherConfig,
-    PackedBoxes,
+    PackedBatch,
     ProbIoULoss,
     pairwise_costs,
 )
@@ -93,8 +93,8 @@ def benchmark(settings: BenchmarkSettings) -> BenchmarkReport:
     target_count = settings.samples * settings.targets
     target_boxes, _ = sample_pair(target_count, geometry, 1000)
     target_cu = torch.arange(settings.samples + 1, device=device) * settings.targets
-    preds, targets = PackedBoxes(first, pred_cu), PackedBoxes(target_boxes, target_cu)
-    aligned = PackedBoxes(second, pred_cu)
+    preds, targets = PackedBatch(first, pred_cu), PackedBatch(target_boxes, target_cu)
+    aligned = PackedBatch(second, pred_cu)
     config = MatcherConfig(chunk_size=settings.chunk_size)
     matcher, criterion = HungarianMatcher(config), ProbIoULoss()
     with torch.no_grad():

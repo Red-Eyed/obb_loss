@@ -1,6 +1,6 @@
 # Standalone packed assignment
 
-`HungarianMatcher.forward(preds: PackedBoxes, targets: PackedBoxes)` constructs
+`HungarianMatcher.forward(preds: PackedBatch, targets: PackedBatch)` constructs
 per-sample ProbIoU costs and returns `Ok(Assignment)` or `Err(InputError)`.
 A custom unreduced aligned cost function can replace the built-in geometry cost.
 The matcher does not impose classification labels, quality targets, or decoder layers.

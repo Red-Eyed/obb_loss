@@ -1,4 +1,4 @@
-"""Borrowed packed geometry and checked admission outside tensor execution."""
+"""Borrowed packed tensors and box-specific admission checks."""
 
 from __future__ import annotations
 
@@ -39,20 +39,17 @@ class InputError(NamedTuple):
     detail: str
 
 
-class PackedBoxes(NamedTuple):
-    """Borrow packed oriented-box geometry and its sample boundaries.
-
-    The record is immutable but its tensors are mutable. Callers must preserve valid contents during execution. Use make_packed_boxes for checked construction.
+class PackedBatch(NamedTuple):
+    """Borrow packed tensor values and their sample boundaries.
 
     Attributes:
-        boxes: Floating [count, 6] values (cx, cy, w, h, cos(theta), sin(theta));
-            finite positive sides and nonzero directions, in one coordinate
-            frame/unit.
-        cu_seqlens: Same-device int32/int64 [batch + 1] offsets, starting at 0 and
-            ending at count; repeated offsets retain empty samples.
+        values: Tensor with its first axis indexing packed items; box APIs require
+            floating [count, 6] geometry in (cx, cy, w, h, cos(theta), sin(theta)) order.
+        cu_seqlens: Same-device int32/int64 [samples + 1] cumulative item counts.
+            Starts at zero, ends at count; repeated offsets preserve empty samples.
     """
 
-    boxes: Tensor[[int, 6]]
+    values: Tensor
     cu_seqlens: Tensor[[int]]
 
 
@@ -118,8 +115,9 @@ def validate_layout(
 
 
 def make_packed_boxes(
-    boxes: Tensor, cu_seqlens: Tensor
-) -> Result[PackedBoxes, InputError]:
+    boxes: Tensor,
+    cu_seqlens: Tensor,
+) -> Result[PackedBatch, InputError]:
     """Validate and borrow packed box tensors.
 
     Value checks synchronize accelerators. Admitted tensors must remain valid while used.
@@ -131,7 +129,7 @@ def make_packed_boxes(
             and ending at count. Repeated offsets represent empty samples.
 
     Returns:
-        Ok(PackedBoxes) borrowing both tensors, or Err(InputError) identifying an
+        Ok(PackedBatch) borrowing the tensors, or Err(InputError) identifying an
         invalid geometry/layout field.
     """
     match validate_geometry(boxes):
@@ -143,10 +141,10 @@ def make_packed_boxes(
         case Err() as failure:
             return failure
         case Ok():
-            return Ok(PackedBoxes(boxes, cu_seqlens))
+            return Ok(PackedBatch(boxes, cu_seqlens))
 
 
-def sample_indices(packed: PackedBoxes) -> Tensor[[int]]:
+def sample_indices(packed: PackedBatch) -> Tensor[[int]]:
     """Map packed boxes to their owning samples.
 
     Args:
@@ -159,5 +157,5 @@ def sample_indices(packed: PackedBoxes) -> Tensor[[int]]:
     return torch.repeat_interleave(
         torch.arange(cu.shape[0] - 1, device=cu.device),
         cu[1:] - cu[:-1],
-        output_size=packed.boxes.shape[0],
+        output_size=packed.values.shape[0],
     )

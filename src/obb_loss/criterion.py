@@ -4,18 +4,18 @@ import torch
 from torch import Tensor, nn
 from typing_extensions import override
 
-from obb_loss.config import ProbIoUConfig
+from obb_loss.config import LossConfig
 from obb_loss.losses.stable_probiou import stable_probiou_loss, validate_pair_domain
-from obb_loss.packed import ErrorKind, InputError, PackedBoxes, make_packed_boxes
+from obb_loss.packed import ErrorKind, InputError, PackedBatch, make_packed_boxes
 from obb_loss.reduction import reduce_loss
 from obb_loss.result import Err, Ok, Result
 
-_DEFAULT_CONFIG = ProbIoUConfig()
+_DEFAULT_CONFIG = LossConfig()
 
 
 def validate_alignment(
-    preds: PackedBoxes, targets: PackedBoxes
-) -> Result[tuple[PackedBoxes, PackedBoxes], InputError]:
+    preds: PackedBatch, targets: PackedBatch
+) -> Result[tuple[PackedBatch, PackedBatch], InputError]:
     """Validate already matched packed geometry.
 
     Args:
@@ -42,7 +42,7 @@ def validate_alignment(
                 ErrorKind.ALIGNMENT, "cu_seqlens", "aligned sample counts must match"
             )
         )
-    if preds.boxes.device != targets.boxes.device:
+    if preds.values.device != targets.values.device:
         return Err(InputError(ErrorKind.DEVICE, "pairs", "devices must match"))
     return Ok((preds, targets))
 
@@ -50,7 +50,7 @@ def validate_alignment(
 class ProbIoULoss(nn.Module):
     """Stable loss on already matched packed boxes; no assignment or layer loop."""
 
-    def __init__(self, config: ProbIoUConfig = _DEFAULT_CONFIG) -> None:
+    def __init__(self, config: LossConfig = _DEFAULT_CONFIG) -> None:
         """Configure the aligned ProbIoU box loss.
 
         Args:
@@ -62,7 +62,7 @@ class ProbIoULoss(nn.Module):
 
     @override
     # Torch stubs declare variadic forward; this module intentionally narrows it.
-    def forward(self, preds: PackedBoxes, targets: PackedBoxes) -> Tensor:  # pyrefly: ignore[bad-override]
+    def forward(self, preds: PackedBatch, targets: PackedBatch) -> Tensor:  # pyrefly: ignore[bad-override]
         """Evaluate ProbIoU on trusted, already matched packed boxes.
 
         Inputs must satisfy the ProbIoU numerical domain. A zero weight skips the loss computation. Use checked for typed input failures; this path omits synchronizing value validation.
@@ -78,13 +78,13 @@ class ProbIoULoss(nn.Module):
             scalar reductions are connected zeros.
         """
         if self.config.weight == 0:
-            values = preds.boxes[:, 0].double() * 0 + targets.boxes[:, 0].double() * 0
+            values = preds.values[:, 0].double() * 0 + targets.values[:, 0].double() * 0
             return reduce_loss(values, self.config.reduction)
-        values = stable_probiou_loss(preds.boxes, targets.boxes)
+        values = stable_probiou_loss(preds.values, targets.values)
         return reduce_loss(values, self.config.reduction) * self.config.weight
 
     def checked(
-        self, preds: PackedBoxes, targets: PackedBoxes
+        self, preds: PackedBatch, targets: PackedBatch
     ) -> Result[Tensor, InputError]:
         """Validate aligned packed boxes before evaluating ProbIoU.
 
@@ -103,7 +103,7 @@ class ProbIoULoss(nn.Module):
                 return failure
             case Ok():
                 pass
-        match validate_pair_domain(preds.boxes, targets.boxes):
+        match validate_pair_domain(preds.values, targets.values):
             case Err() as failure:
                 return failure
             case Ok():

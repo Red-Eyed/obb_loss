@@ -51,12 +51,8 @@ while supporting 3.11. Newer syntax in external stub files is parsed by Pyrefly,
 not imported by the runtime. Do not evaluate native annotations at runtime without
 an explicitly supported annotation-resolution boundary.
 
-Aligned box composition uses `LossFunction[BoxLossContext]` for pair vectors.
-Set composition uses `LossFunction[SetLossContext]` for raw sample vectors and
-`LossFunction[SetCostContext]` for bounded candidate vectors. Both return typed
-`Result[Tensor[[int]], InputError]`. Static tests reject unchecked Tensor returns and
-mixing a cost context into a sample-loss selection. Runtime checks establish vector
-counts, floating dtype, device, finiteness, and valid record contents.
-Context output counts and devices are read as metadata without tensor allocation.
-Native stubs currently expose `Tensor.device` as `Any`; context properties cast
-that known Torch attribute to `torch.device` at this boundary.
+The set criterion uses ordinary subclass method signatures with `Predictions`,
+`Targets` and `Assignment`. Static tests accept compatible overrides and reject
+incorrect argument/return contracts. Runtime checks establish cross-field alignment,
+vector counts, dtype, device, finiteness and valid geometry. `PackedBatch` is a
+layout record; box validators establish its six-coordinate geometry contract.
