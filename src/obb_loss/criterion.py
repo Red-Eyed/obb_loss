@@ -54,6 +54,9 @@ class ProbIoULoss(nn.Module):
         Inputs are borrowed; mean/sum of empty pairs is a differentiable zero.
         Use checked for typed failures; forward avoids synchronizing value checks.
         """
+        if self.config.weight == 0:
+            values = preds.boxes[:, 0].double() * 0 + targets.boxes[:, 0].double() * 0
+            return reduce_loss(values, self.config.reduction)
         values = stable_probiou_loss(preds.boxes, targets.boxes)
         return reduce_loss(values, self.config.reduction) * self.config.weight
 

@@ -40,6 +40,11 @@ Xiang Li et al. *Generalized Focal Loss: Learning Qualified and Distributed Boun
 for Dense Object Detection*, NeurIPS 2020,
 [arXiv:2006.04388](https://arxiv.org/abs/2006.04388).
 Quality focal loss modulates BCE with `abs(target - sigmoid(logit))^beta`.
+Supported beta is >=1; smaller positive exponents have singular modulation derivatives
+at exact equality. VFL's negative modulation uses `exp(gamma * logsigmoid(logit))`
+to avoid fractional-power backward NaNs when sigmoid underflows. These are explicit
+numerical choices. VFL switches branches at target zero; target gradients there are
+branch derivatives, not derivatives of a continuous extension across zero.
 
 Quality targets are supplied explicitly in `[0, 1]`, one value per logit; zero represents
 a negative class. The library does not derive assignment, positive masks, or quality labels.

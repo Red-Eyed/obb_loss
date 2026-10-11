@@ -48,7 +48,15 @@ class QFLConfig(LossConfig):
     """Quality focal modulation for caller-supplied quality labels."""
 
     kind: Literal["qfl"] = "qfl"
-    beta: Nonnegative = 2.0
+    beta: Annotated[float, Field(ge=1, allow_inf_nan=False)] = 2.0
+
+
+class MatcherConfig(BaseModel):
+    """Bound temporary geometry and complete assignment cost storage independently."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    chunk_size: Positive = 65536
+    max_pairs: Annotated[int, Field(ge=0)] = 10_000_000
 
 
 def parse_config(model: type[C], raw: object) -> Result[C, InputError]:
