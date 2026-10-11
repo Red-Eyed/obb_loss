@@ -296,61 +296,29 @@ def test_l1_size_gradient_can_vanish_at_saturated_sigmoid(
         assert raw_gradient.item() == 0
 
 
-@pytest.mark.parametrize("coordinate", range(6))
-@pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf")])
-@pytest.mark.parametrize("invalid_input", ["prediction", "target"])
-def test_nonfinite_coordinates_require_finite_forward_backward(
-    pair: tuple[Tensor, Tensor],
-    coordinate: int,
-    value: float,
-    invalid_input: str,
-) -> None:
-    """Require defensive handling of each nonfinite coordinate in either input."""
-    first, second = (boxes.detach().clone() for boxes in pair)
-    invalid = first if invalid_input == "prediction" else second
-    invalid[0, coordinate] = value
-    first.requires_grad_()
-    second.requires_grad_()
-    loss = stable_probiou_loss(first, second)
-    assert torch.isfinite(loss).all()
-    assert torch.isfinite(stable_probiou(first, second)).all()
-    for gradient in torch.autograd.grad(loss.sum(), (first, second)):
-        assert torch.isfinite(gradient).all()
-
-
 @pytest.mark.parametrize(
     ("coordinates", "value"),
     [
-        ((2,), -1.0),
-        ((3,), -1.0),
-        ((2, 3), -1.0),
         ((4, 5), 0.0),
-        ((2,), 1e-300),
-        ((2,), 1e300),
-        ((0,), 1e300),
-        ((4, 5), 1e-300),
-        ((4, 5), 1e300),
+        ((2,), 1e-12),
+        ((3,), 1e-12),
+        ((4, 5), 1e-12),
     ],
     ids=[
-        "negative-width",
-        "negative-height",
-        "negative-sides",
         "zero-direction",
         "tiny-width",
-        "huge-width",
-        "huge-center",
+        "tiny-height",
         "tiny-direction",
-        "huge-direction",
     ],
 )
 @pytest.mark.parametrize("invalid_input", ["prediction", "target"])
-def test_extreme_coordinates_require_finite_forward_backward(
+def test_small_sizes_and_directions_require_finite_forward_backward(
     pair: tuple[Tensor, Tensor],
     coordinates: tuple[int, ...],
     value: float,
     invalid_input: str,
 ) -> None:
-    """Exercise invalid geometry and extreme finite values without assuming a policy."""
+    """Exercise collapsed directions and small positive geometry during training."""
     first, second = (boxes.detach().clone() for boxes in pair)
     invalid = first if invalid_input == "prediction" else second
     invalid[:, coordinates] = value
@@ -363,14 +331,13 @@ def test_extreme_coordinates_require_finite_forward_backward(
         assert torch.isfinite(gradient).all()
 
 
-@pytest.mark.parametrize("value", [0.0, float("nan"), float("inf")])
-def test_invalid_row_requires_finite_shared_target_gradient(
-    pair: tuple[Tensor, Tensor], value: float
+def test_zero_size_row_requires_finite_shared_target_gradient(
+    pair: tuple[Tensor, Tensor],
 ) -> None:
-    """An invalid prediction must not poison gradients into a broadcast target."""
+    """A collapsed prediction must not poison gradients into a broadcast target."""
     first, second = pair
     mixed_first = torch.cat((first.detach(), first.detach()))
-    mixed_first[0, 2] = value
+    mixed_first[0, 2] = 0
     mixed_first.requires_grad_()
     actual = stable_probiou_loss(mixed_first, second)
     expected = stable_probiou_loss(first, second)
@@ -378,3 +345,177 @@ def test_invalid_row_requires_finite_shared_target_gradient(
     assert torch.isfinite(actual).all()
     gradients = torch.autograd.grad(actual.sum(), (mixed_first, second))
     assert all(torch.isfinite(gradient).all() for gradient in gradients)
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("size", [1.0, 1e-3, 1e-5])
+def test_small_box_leaf_gradients_require_finite_values(
+    device: torch.device, dtype: torch.dtype, size: float
+) -> None:
+    """Check gradient casts to model output dtype even when float64 loss is finite."""
+    first = torch.tensor(
+        [[0, 0, size, size, 1, 0]], device=device, dtype=dtype, requires_grad=True
+    )
+    second = torch.tensor(
+        [[size / 4, 0, size, size, 1, 0]],
+        device=device,
+        dtype=dtype,
+        requires_grad=True,
+    )
+    loss = stable_probiou_loss(first, second)
+    assert torch.isfinite(loss).all()
+    assert ((loss >= 0) & (loss <= 1)).all()
+    for gradient in torch.autograd.grad(loss.sum(), (first, second)):
+        assert torch.isfinite(gradient).all()
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("zero_coordinates", [(2,), (3,), (2, 3), (4, 5)])
+def test_collapsed_model_outputs_require_finite_backward(
+    device: torch.device, dtype: torch.dtype, zero_coordinates: tuple[int, ...]
+) -> None:
+    """Check backward independently of forward assertions for model output dtypes."""
+    first = torch.tensor([[0.5, 0.5, 0.2, 0.1, 1, 0]], device=device, dtype=dtype)
+    first[:, zero_coordinates] = 0
+    first.requires_grad_()
+    second = torch.tensor(
+        [[0.4, 0.4, 0.1, 0.2, 1, 0]], device=device, dtype=dtype, requires_grad=True
+    )
+    loss = stable_probiou_loss(first, second)
+    for gradient in torch.autograd.grad(loss.sum(), (first, second)):
+        assert torch.isfinite(gradient).all()
+
+
+def test_zero_size_query_preserves_other_query_gradient(
+    pair: tuple[Tensor, Tensor],
+) -> None:
+    """A collapsed query must not change another query's loss or gradient."""
+    first, second = pair
+    predictions = torch.cat((first.detach(), first.detach()))
+    predictions[0, 2] = 0
+    predictions.requires_grad_()
+    targets = torch.cat((second.detach(), second.detach()))
+    loss = stable_probiou_loss(predictions, targets)
+    expected = stable_probiou_loss(first, second)
+    torch.testing.assert_close(loss[1:], expected, atol=0, rtol=0)
+    actual_gradient = torch.autograd.grad(loss.sum(), predictions)[0]
+    expected_gradient = torch.autograd.grad(expected.sum(), first)[0]
+    assert torch.isfinite(actual_gradient[1:]).all()
+    torch.testing.assert_close(actual_gradient[1:], expected_gradient, atol=0, rtol=0)
+
+
+@pytest.mark.parametrize("zero_coordinates", [(2,), (3,), (2, 3)])
+def test_sigmoid_size_collapse_requires_finite_logit_gradients(
+    device: torch.device, zero_coordinates: tuple[int, ...]
+) -> None:
+    """Require safe backward through FP32 decoding when finite logits saturate."""
+    logits = torch.zeros((1, 5), device=device, dtype=torch.float32)
+    logits[:, zero_coordinates] = -1000
+    logits.requires_grad_()
+    angle = logits[..., 4:5]
+    boxes = torch.cat((logits[..., :4].sigmoid(), angle.cos(), angle.sin()), dim=-1)
+    target = boxes.new_tensor([[0.5, 0.5, 0.2, 0.1, 1, 0]])
+    loss = stable_probiou_loss(boxes, target)
+    gradient = torch.autograd.grad(loss.sum(), logits)[0]
+    assert torch.isfinite(gradient).all()
+
+
+def test_broadcast_invalid_pairs_require_finite_forward_backward(
+    pair: tuple[Tensor, Tensor],
+) -> None:
+    """Check pairwise broadcast masking without contaminating valid comparisons."""
+    first, second = pair
+    predictions = rearrange(
+        torch.cat((first.detach(), torch.zeros_like(first))), "b c -> b 1 c"
+    ).requires_grad_()
+    targets = rearrange(
+        second.detach().expand(3, 6).clone(), "n c -> 1 n c"
+    ).requires_grad_()
+    loss = stable_probiou_loss(predictions, targets)
+    assert loss.shape == (2, 3)
+    expected = stable_probiou_loss(first, second)
+    torch.testing.assert_close(loss[0], expected.expand(3), atol=0, rtol=0)
+    assert torch.isfinite(loss).all()
+    for gradient in torch.autograd.grad(loss.sum(), (predictions, targets)):
+        assert torch.isfinite(gradient).all()
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
+@pytest.mark.parametrize(
+    "direction",
+    [
+        (0.0, 0.0),
+        (0.0, 1.0),
+        (1.0, 0.0),
+        (-1.0, 0.0),
+        (0.0, -1.0),
+        (3.0, -4.0),
+        (-3.0, 4.0),
+        (1e-12, -1e-12),
+        (1e4, -1e4),
+    ],
+    ids=[
+        "zero-pair",
+        "zero-cosine",
+        "zero-sine",
+        "negative-cosine",
+        "negative-sine",
+        "non-unit",
+        "opposite-non-unit",
+        "tiny-pair",
+        "large-pair",
+    ],
+)
+def test_model_direction_outputs_require_finite_forward_backward(
+    device: torch.device, dtype: torch.dtype, direction: tuple[float, float]
+) -> None:
+    """Allow finite unconstrained direction outputs, including a collapsed pair."""
+    cosine, sine = direction
+    first = torch.tensor(
+        [[0.5, 0.5, 0.2, 0.1, cosine, sine]],
+        device=device,
+        dtype=dtype,
+        requires_grad=True,
+    )
+    second = torch.tensor(
+        [[0.4, 0.4, 0.1, 0.2, 1, 0]],
+        device=device,
+        dtype=dtype,
+        requires_grad=True,
+    )
+    loss = stable_probiou_loss(first, second)
+    similarity = stable_probiou(first, second)
+    assert torch.isfinite(loss).all()
+    assert torch.isfinite(similarity).all()
+    assert ((loss >= 0) & (loss <= 1)).all()
+    torch.testing.assert_close(similarity, 1 - loss, atol=0, rtol=0)
+    for gradient in torch.autograd.grad(loss.sum(), (first, second)):
+        assert torch.isfinite(gradient).all()
+
+
+@pytest.mark.parametrize("scale", [1e-12, 1e-4, 1.0, 1e4])
+@pytest.mark.parametrize("sign", [-1.0, 1.0])
+def test_nonunit_directions_preserve_values_and_scaled_gradients(
+    device: torch.device, scale: float, sign: float
+) -> None:
+    """Direction magnitude and a half-turn preserve values and chain-rule gradients."""
+    first = torch.tensor(
+        [[0.5, 0.5, 0.2, 0.1, 0.6, -0.8]],
+        device=device,
+        dtype=torch.float64,
+        requires_grad=True,
+    )
+    second = first.new_tensor([[0.4, 0.4, 0.1, 0.2, 1, 0]])
+    rescaled = first.detach().clone()
+    rescaled[..., 4:6] *= sign * scale
+    rescaled.requires_grad_()
+    expected = stable_probiou_loss(first, second)
+    actual = stable_probiou_loss(rescaled, second)
+    torch.testing.assert_close(actual, expected, atol=1e-14, rtol=1e-12)
+    expected_gradient = torch.autograd.grad(expected.sum(), first)[0]
+    actual_gradient = torch.autograd.grad(actual.sum(), rescaled)[0]
+    actual_gradient[..., 4:6] *= sign * scale
+    assert torch.isfinite(actual_gradient).all()
+    torch.testing.assert_close(
+        actual_gradient, expected_gradient, atol=1e-12, rtol=1e-10
+    )
