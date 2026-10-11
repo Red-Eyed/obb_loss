@@ -1,6 +1,8 @@
 # obb_loss
 
-PyTorch oriented-box losses and full DETR criteria with packed sequence layouts.
+PyTorch oriented-box losses, VFL/QFL, and a standalone matcher with packed layouts.
+Box criteria expose forward(preds: PackedBoxes, targets: PackedBoxes). Detector layers,
+auxiliary orchestration, and quality-target generation belong to the caller.
 Follow the user's global instructions and the local ignored implementation plan.
 
 ## Checks
