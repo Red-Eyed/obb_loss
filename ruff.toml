@@ -1,0 +1,15 @@
+required-version = ">=0.16.9"
+target-version = "py311"
+line-length = 88
+
+[lint]
+select = ["E4", "E7", "E9", "F", "I", "UP", "B", "ANN", "TC", "D", "RUF", "PGH003", "PGH004", "PT"]
+
+[lint.pydocstyle]
+convention = "google"
+
+[lint.flake8-annotations]
+allow-star-arg-any = false
+ignore-fully-untyped = false
+suppress-none-returning = false
+suppress-dummy-args = false
