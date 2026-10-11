@@ -185,16 +185,16 @@ def degenerate_pair(
     ids=["zero-width", "zero-height", "zero-sides", "all-zero"],
 )
 @pytest.mark.parametrize("invalid_input", ["prediction", "target", "both"])
-def test_zero_sizes_currently_produce_nan(
+def test_zero_sizes_require_finite_forward_backward(
     degenerate_pair: tuple[Tensor, Tensor],
 ) -> None:
-    """Characterize out-of-domain values and backward before adding a fallback."""
+    """Require finite loss, similarity and gradients for degenerate boxes."""
     first, second = degenerate_pair
     loss = stable_probiou_loss(first, second)
-    assert torch.isnan(loss).all()
-    assert torch.isnan(stable_probiou(first, second)).all()
+    assert torch.isfinite(loss).all()
+    assert torch.isfinite(stable_probiou(first, second)).all()
     gradients = torch.autograd.grad(loss.sum(), degenerate_pair)
-    assert all(not torch.isfinite(gradient).all() for gradient in gradients)
+    assert all(torch.isfinite(gradient).all() for gradient in gradients)
 
 
 @pytest.mark.parametrize("zero_coordinates", [(2,), (3,), (2, 3)])
@@ -294,3 +294,87 @@ def test_l1_size_gradient_can_vanish_at_saturated_sigmoid(
         assert size.item() == 0
         assert size_gradient.item() == -1
         assert raw_gradient.item() == 0
+
+
+@pytest.mark.parametrize("coordinate", range(6))
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf")])
+@pytest.mark.parametrize("invalid_input", ["prediction", "target"])
+def test_nonfinite_coordinates_require_finite_forward_backward(
+    pair: tuple[Tensor, Tensor],
+    coordinate: int,
+    value: float,
+    invalid_input: str,
+) -> None:
+    """Require defensive handling of each nonfinite coordinate in either input."""
+    first, second = (boxes.detach().clone() for boxes in pair)
+    invalid = first if invalid_input == "prediction" else second
+    invalid[0, coordinate] = value
+    first.requires_grad_()
+    second.requires_grad_()
+    loss = stable_probiou_loss(first, second)
+    assert torch.isfinite(loss).all()
+    assert torch.isfinite(stable_probiou(first, second)).all()
+    for gradient in torch.autograd.grad(loss.sum(), (first, second)):
+        assert torch.isfinite(gradient).all()
+
+
+@pytest.mark.parametrize(
+    ("coordinates", "value"),
+    [
+        ((2,), -1.0),
+        ((3,), -1.0),
+        ((2, 3), -1.0),
+        ((4, 5), 0.0),
+        ((2,), 1e-300),
+        ((2,), 1e300),
+        ((0,), 1e300),
+        ((4, 5), 1e-300),
+        ((4, 5), 1e300),
+    ],
+    ids=[
+        "negative-width",
+        "negative-height",
+        "negative-sides",
+        "zero-direction",
+        "tiny-width",
+        "huge-width",
+        "huge-center",
+        "tiny-direction",
+        "huge-direction",
+    ],
+)
+@pytest.mark.parametrize("invalid_input", ["prediction", "target"])
+def test_extreme_coordinates_require_finite_forward_backward(
+    pair: tuple[Tensor, Tensor],
+    coordinates: tuple[int, ...],
+    value: float,
+    invalid_input: str,
+) -> None:
+    """Exercise invalid geometry and extreme finite values without assuming a policy."""
+    first, second = (boxes.detach().clone() for boxes in pair)
+    invalid = first if invalid_input == "prediction" else second
+    invalid[:, coordinates] = value
+    first.requires_grad_()
+    second.requires_grad_()
+    loss = stable_probiou_loss(first, second)
+    assert torch.isfinite(loss).all()
+    assert torch.isfinite(stable_probiou(first, second)).all()
+    for gradient in torch.autograd.grad(loss.sum(), (first, second)):
+        assert torch.isfinite(gradient).all()
+
+
+@pytest.mark.parametrize("value", [0.0, float("nan"), float("inf")])
+def test_invalid_row_requires_finite_shared_target_gradient(
+    pair: tuple[Tensor, Tensor], value: float
+) -> None:
+    """An invalid prediction must not poison gradients into a broadcast target."""
+    first, second = pair
+    mixed_first = torch.cat((first.detach(), first.detach()))
+    mixed_first[0, 2] = value
+    mixed_first.requires_grad_()
+    actual = stable_probiou_loss(mixed_first, second)
+    expected = stable_probiou_loss(first, second)
+    torch.testing.assert_close(actual[1:], expected, atol=0, rtol=0)
+    assert torch.isfinite(actual).all()
+    gradients = torch.autograd.grad(actual.sum(), (mixed_first, second))
+    assert all(torch.isfinite(gradient).all() for gradient in gradients)
