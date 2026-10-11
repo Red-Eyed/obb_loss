@@ -1,7 +1,8 @@
 # Per-layer set criterion
 
 `obb.SetCriterion` matches and supervises one decoder layer. Its interface is
-`forward(preds: PackedPredictions, targets: PackedTargets, *, normalizer=TargetCount.LOCAL)`.
+`forward(preds: PackedPredictions, targets: PackedTargets, *, reduction=Reduction.SUM,
+normalizer=TargetCount.PER_BATCH)`.
 It returns `Ok(SetLosses)` or `Err(InputError)`. Iterate over decoder layers and
 aggregate their weighted totals in your pipeline; the criterion has no auxiliary loop.
 
@@ -36,12 +37,32 @@ must retain defaults because the set criterion owns both operations. All-zero
 training weights are allowed; all-zero matching weights are rejected. Disabled
 terms skip numerical evaluation and return gradient-connected zeros.
 
-`SetLosses.classification`, `.l1`, and `.probiou` are normalized, unweighted scalar
-losses; `.total` is their weighted sum. `.assignment` contains detached global indices.
-Default normalization divides each component by the local target count, clamped to
-one. An explicit finite positive `normalizer` replaces that divisor. Distributed
-target-count reduction belongs to the caller. Empty targets produce zero box losses
-and negative classification supervision; empty prediction packs return zero.
+`SetLosses.classification`, `.l1`, and `.probiou` are normalized, unweighted losses;
+`.total` is their weighted sum. `.assignment` contains detached global indices.
+The criterion first sums query/class losses and matched box losses within each
+sample, then normalizes, then reduces across samples. Both options are explicit:
+
+| Argument | Option | Behavior |
+| --- | --- | --- |
+| `normalizer` | `TargetCount.PER_SAMPLE` | Divide each sample by its own target count, clamped to 1 |
+| `normalizer` | `TargetCount.PER_BATCH` | Divide every sample by the local batch target count, clamped to 1 |
+| `normalizer` | Positive finite scalar | Divide every sample by the supplied value; 1 gives raw sums |
+| `reduction` | `Reduction.NONE` | Return `[batch]` for every loss component and total |
+| `reduction` | `Reduction.SUM` | Sum the normalized sample vector into a scalar |
+| `reduction` | `Reduction.MEAN` | Average the normalized sample vector into a scalar |
+
+For raw sample losses `[6, 9]` and target counts `[1, 3]`, `PER_SAMPLE` yields
+`[6, 3]`, while `PER_BATCH` yields `[1.5, 2.25]`. MEAN then averages the chosen
+vector; it does not change its normalization policy. Empty samples are retained
+and count toward MEAN. Zero samples produce an empty NONE vector or a connected
+scalar zero for SUM/MEAN.
+
+Defaults are SUM and PER_BATCH, preserving the previous batch-wide normalized
+scalar behavior. `TargetCount.LOCAL` is replaced by the explicit PER_BATCH name.
+Distributed target-count reduction belongs to the caller: pass its positive scalar
+value and use SUM. Empty targets produce zero box losses and negative classification
+supervision. The DETR example shows explicit per-sample normalization and caller
+aggregation of the returned vector.
 
 Computations use float64 with autocast disabled locally. Inputs remain connected
 to autograd, including caller quality. Existing ProbIoU domain and low-precision

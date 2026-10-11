@@ -23,7 +23,9 @@ with the target boxes. For angle-based output, use `obb.boxes_from_angles` first
 The criterion rematches each layer using classification, L1, and ProbIoU costs with
 independent matching weights. VFL uses caller-supplied per-target quality (0.8 in
 this example); unmatched query/classes have zero quality. Training uses separate
-loss weights and divides by the local target count (at least 1). The caller weights
-auxiliary layers by 0.5 and sums them. Empty targets still train negative classification.
+loss weights and returns per-sample values with `Reduction.NONE` and
+`TargetCount.PER_SAMPLE`. The caller averages those values, weights auxiliary layers
+by 0.5, and sums the layer losses. Empty target samples still train negative classification.
 For distributed training, compute the appropriate target-count normalizer in your
-pipeline and pass its positive scalar value to `criterion.forward(..., normalizer=value)`.
+pipeline and pass its positive scalar value with `reduction=obb.Reduction.SUM`.
+See [all normalization/reduction options](../docs/set_criterion.md).

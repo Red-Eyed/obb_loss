@@ -72,6 +72,9 @@ classification, L1, and ProbIoU losses. Use `obb.pack_predictions(boxes, logits)
 `obb.pack_targets(samples, device=..., dtype=...)`, where each `obb.TargetSample`
 contains boxes, class labels, and caller-supplied quality. Match `obb.Ok(value=losses)`
 from `criterion.forward(preds, targets)` and backpropagate `losses.total`.
+Pass `reduction=obb.Reduction.NONE` for `[batch]` losses, or SUM/MEAN for a scalar.
+Normalization is explicit: `normalizer=obb.TargetCount.PER_SAMPLE`, PER_BATCH,
+or a positive scalar. The defaults SUM/PER_BATCH preserve batch-wide target normalization.
 `obb.SetCriterionConfig.weights` controls training; `.matcher.weights` controls
 assignment independently. See [the DETR example](examples/detr.py) and
 [set criterion contracts](docs/set_criterion.md).

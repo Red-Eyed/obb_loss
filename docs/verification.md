@@ -1,7 +1,7 @@
 # Verification evidence
 
 Local checks use Python 3.11.15, PyTorch 2.14.1, and macOS arm64 CPU. CUDA tests are
-present but unverified locally: 79 tests passed, 55 CUDA cases skipped. The portable
+present but unverified locally: 88 tests passed, 64 CUDA cases skipped. The portable
 `py3-none-any` wheel was installed in an isolated Python 3.11 environment and its
 public forward/backward API verified; all README Python examples also executed.
 CI is configured to test Python 3.11–3.14 on Linux; its execution is
@@ -23,6 +23,9 @@ empty samples, and all four floating input dtypes under outer autocast. The DETR
 example verifies final and auxiliary layer backward passes. The high-level matcher
 and criterion contain validation and a CPU solver; fullgraph compilation coverage
 applies to the plain ProbIoU criterion, not this orchestration API.
+Per-sample reduction tests compare sample vectors to independent calls, verify
+explicit per-sample/batch normalization and SUM/MEAN equivalence, preserve zero-query
+segments, and isolate gradients when selecting one sample's loss.
 
 ## Seeded CPU stress study
 

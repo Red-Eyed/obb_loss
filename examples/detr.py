@@ -25,7 +25,12 @@ def layer_loss(
         case obb.Err() as failure:
             return failure
         case obb.Ok(value=preds):
-            return criterion.forward(preds, targets)
+            return criterion.forward(
+                preds,
+                targets,
+                reduction=obb.Reduction.NONE,
+                normalizer=obb.TargetCount.PER_SAMPLE,
+            )
 
 
 def main() -> None:
@@ -79,10 +84,9 @@ def main() -> None:
                 return
             case obb.Ok(value=losses):
                 weight = 1.0 if index == len(outputs) - 1 else 0.5
-                total = total + weight * losses.total
+                total = total + weight * losses.total.mean()
                 print(
-                    f"layer {index}: classification={losses.classification.detach().item():.6f}, "
-                    f"L1={losses.l1.detach().item():.6f}, ProbIoU={losses.probiou.detach().item():.6f}"
+                    f"layer {index} per-sample totals: {losses.total.detach().tolist()}"
                 )
     total.backward()
     for index, output in enumerate(outputs):
