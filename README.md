@@ -2,7 +2,7 @@
 
 Typed PyTorch oriented-box losses and standalone matching for DETR-like detectors.
 The package exposes pure functions, Pydantic-configured `nn.Module` criteria, and a
-typed custom-function builder. Detector-layer orchestration stays in your pipeline.
+typed callback composition. Detector-layer orchestration stays in your pipeline.
 
 See [runnable examples](examples/README.md) for complete CPU forward/backward scripts.
 
@@ -106,30 +106,34 @@ classification target synthesis is included. See [loss papers and numerical poli
 import obb_loss as obb
 from torch import Tensor
 
-def center_loss(preds: Tensor, targets: Tensor) -> Tensor:
-    """Return an unreduced center penalty for already aligned boxes."""
-    return (preds[:, :2] - targets[:, :2]).square().sum(-1)
+def center_loss(context: obb.BoxLossContext) -> obb.Result[Tensor, obb.InputError]:
+    """Return one squared center penalty per aligned packed pair."""
+    delta = context.preds.boxes[:, :2].double() - context.targets.boxes[:, :2].double()
+    return obb.Ok(delta.square().sum(-1))
 
-builder = (obb.BoxLossBuilder()
-           .add("probiou", obb.stable_probiou_loss)
-           .add("center", center_loss, weight=0.1))
-custom_result = builder.build(obb.LossConfig(reduction=obb.Reduction.MEAN))
+criterion = obb.CompositeBoxLoss(losses={
+    "probiou": obb.box_probiou_loss,
+    "center": obb.WeightedLoss(center_loss, obb.WeightConfig(weight=0.1)),
+})
+# criterion(preds, targets, reduction=obb.Reduction.MEAN) returns Ok(loss) or Err.
 config_result = obb.parse_config(obb.ProbIoUConfig, {"weight": 2., "reduction": "sum"})
 ```
 
-Functions receive float64 aligned tensors and return finite same-device `[pairs]` losses.
-The library applies weights/reduction once. `checked` catches observable output-contract
-failures; user code bugs propagate. `nn.Module` components are registered as children,
-including parameters and buffers, so `.to()` and `state_dict()` work. Zero-weight terms
-are omitted. Builders are immutable descriptions; caller-owned modules can still be shared
-if deliberately supplied to multiple builders. Use the same narrow function contract for
-custom matcher costs. Config JSON cannot serialize/reconstruct Python callbacks; recreate
-custom composition before loading weights.
+Box and set compositions share typed Result-returning callbacks and independently
+weighted terms. Box callbacks receive aligned packed geometry through BoxLossContext;
+set callbacks receive SetLossContext, including unmatched predictions. Conversion
+helpers pack list/dense inputs at the caller boundary. Reduction is applied once by
+the criterion. Callback bugs propagate, while observable output failures return Err.
+Module parameters, buffers and hooks are preserved; zero-weight terms are omitted.
+JSON configuration never serializes live callbacks.
+
+The former BoxLossBuilder and build_loss/build_matcher factories are removed. Construct
+CompositeBoxLoss from a callback mapping and built-in modules directly. Composite box
+forward now returns Result and takes reduction at evaluation time. Callback module
+state paths are shorter; recreate composition before loading a compatible state dict.
 
 `parse_config` accepts JSON-compatible values and returns typed validation errors for
-external settings. Direct Pydantic
-model construction retains its ordinary exception semantics. `build_loss` constructs a
-built-in module from validated `ProbIoUConfig`, `VFLConfig`, or `QFLConfig`.
+external settings. Direct Pydantic model construction retains its exception semantics.
 
 ## Verification
 

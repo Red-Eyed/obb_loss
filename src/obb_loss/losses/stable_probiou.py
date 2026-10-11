@@ -42,7 +42,7 @@ def set_probiou_loss(context: SetLossContext) -> Result[Tensor[[int]], InputErro
         Ok(float64 [samples] unweighted raw sums), or a typed numerical-domain error.
     """
     first, second = context.matched_preds.boxes, context.matched_targets.boxes
-    match validate_pairs(first, second):
+    match validate_pair_domain(first, second):
         case Err() as failure:
             return failure
         case Ok():
@@ -65,7 +65,7 @@ def set_probiou_cost(context: SetCostContext) -> Result[Tensor[[int]], InputErro
     """
     first = context.preds.geometry.boxes[context.pred_indices]
     second = context.targets.geometry.boxes[context.target_indices]
-    match validate_pairs(first, second):
+    match validate_pair_domain(first, second):
         case Err() as failure:
             return failure
         case Ok():
@@ -205,6 +205,22 @@ def validate_pairs(
         )
     if preds.device != targets.device:
         return Err(InputError(ErrorKind.DEVICE, "pairs", "devices must match"))
+    return validate_pair_domain(preds, targets)
+
+
+def validate_pair_domain(
+    preds: Tensor, targets: Tensor
+) -> Result[tuple[Tensor, Tensor], InputError]:
+    """Check pair-dependent numerical limits after geometry admission.
+
+    Args:
+        preds: Valid aligned [pairs, 6] geometry on the same device as targets.
+        targets: Valid reference geometry matching preds in shape and units.
+
+    Returns:
+        Ok(borrowed pairs) or Err for normalized side/offset limits. Geometry,
+        shape and device admission belong to the caller.
+    """
     sides1, sides2, delta = _scaled_pair(preds, targets)
     if not bool((torch.minimum(sides1, sides2) >= 1e-30).all()):
         return Err(

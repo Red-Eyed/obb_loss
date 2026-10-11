@@ -1,10 +1,10 @@
 # Verification evidence
 
 Local checks use Python 3.11.15 and 3.12.13, PyTorch 2.14.1, and macOS arm64 CPU.
-Both interpreter suites passed 100 tests; 74 CUDA cases skipped on each interpreter.
+Both interpreter suites passed 103 tests; 77 CUDA cases skipped on each interpreter.
 CUDA remains unverified locally. The portable `py3-none-any` wheel supports Python
-3.11+, and runnable examples cover public forward/backward APIs. The 0.9.0 wheel
-passed custom set-callback forward/backward in an isolated Python 3.11 environment containing neither
+3.11+, and runnable examples cover public forward/backward APIs. The 0.10.0 wheel
+passed packed box-callback forward/backward in an isolated Python 3.11 environment containing neither
 jaxtyping nor shape_extensions.
 CI is configured to test Python 3.11–3.14 on Linux; its execution is
 unverified until the repository workflow runs. AOT eager fullgraph compilation was checked
@@ -18,7 +18,7 @@ Matcher optimality is verified against exhaustive rectangular assignments, with 
 segments, sample isolation, uniqueness, bounded callback chunks, and gradient-preserving
 gather. Strict checker negative fixtures verify Result narrowing and callback signatures.
 Native Pyrefly checks also verify module call inference and reject incorrect tensor
-widths, aligned row counts, and module callback signatures. The builder's custom
+widths, aligned row counts, and module callback signatures. The aligned composition custom
 module test verifies that forward hooks execute through `Module.__call__`. Native
 typing limitations and localized upstream stub workarounds are recorded in
 [typing contracts](typing.md).
@@ -37,6 +37,8 @@ Callback composition tests verify custom regularizers on unmatched queries, regi
 module parameters/buffers and hooks, disabled-term omission, custom bounded matching
 costs, weighted named reports, typed failures, and malformed output rejection. Static
 negative fixtures reject incorrect callback contexts and plain-Tensor return contracts.
+Aligned callback tests cover NONE/SUM/MEAN, registered state/hooks, disabled terms,
+and custom numerical domains independent of ProbIoU admission.
 
 ## Seeded CPU stress study
 

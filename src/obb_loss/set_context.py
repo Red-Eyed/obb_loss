@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, NamedTuple
+from typing import TYPE_CHECKING, NamedTuple, cast
 
 import torch
 from torch import Tensor
@@ -32,10 +32,20 @@ class SetLossContext(NamedTuple):
     matched_preds: PackedBoxes
     matched_targets: PackedBoxes
 
+    @property
+    def output_count(self) -> int:
+        """Return the required output vector length without tensor computation."""
+        return self.preds.geometry.cu_seqlens.shape[0] - 1
+
+    @property
+    def device(self) -> torch.device:
+        """Return the shared input device without tensor computation."""
+        return cast("torch.device", self.preds.logits.device)
+
     def zero(self) -> Tensor[[int]]:
         """Return float64 [samples] zeros connected to query geometry and logits."""
         values = self.preds.geometry.boxes[:, 0].double() * 0
-        values = values + (self.preds.logits.double() * 0).sum(-1)
+        values = values + self.preds.logits[:, 0].double() * 0
         return sum_samples(values, self.preds.geometry.cu_seqlens)
 
 
@@ -53,6 +63,16 @@ class SetCostContext(NamedTuple):
     targets: PackedTargets
     pred_indices: Tensor[[int]]
     target_indices: Tensor[[int]]
+
+    @property
+    def output_count(self) -> int:
+        """Return the required output vector length without tensor computation."""
+        return self.pred_indices.shape[0]
+
+    @property
+    def device(self) -> torch.device:
+        """Return the shared input device without tensor computation."""
+        return cast("torch.device", self.preds.logits.device)
 
     def zero(self) -> Tensor[[int]]:
         """Return float64 [pairs] zeros connected to candidate query inputs."""

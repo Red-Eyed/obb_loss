@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, NamedTuple
 import torch
 from torch import Tensor
 
-from obb_loss.losses.stable_probiou import stable_probiou_loss, validate_pairs
+from obb_loss.losses.stable_probiou import stable_probiou_loss, validate_pair_domain
 from obb_loss.packed import ErrorKind, InputError, PackedBoxes, make_packed_boxes
 from obb_loss.result import Err, Ok, Result
 
@@ -144,7 +144,7 @@ def _fill_block(
         )
         first = preds.boxes[block.pred_start + index // block.columns]
         second = targets.boxes[block.target_start + index % block.columns]
-        match validate_pairs(first, second):
+        match validate_pair_domain(first, second):
             case Err() as failure:
                 return failure
             case Ok():

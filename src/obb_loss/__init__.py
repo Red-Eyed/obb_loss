@@ -3,7 +3,7 @@
 from importlib.metadata import version
 
 from obb_loss.adapters import boxes_from_angles, pack_boxes, pack_dense_boxes
-from obb_loss.builder import BoxLossBuilder, CompositeBoxLoss, build_loss, build_matcher
+from obb_loss.box_composition import BoxLossContext, CompositeBoxLoss, box_probiou_loss
 from obb_loss.composition import LossFunction, WeightedLoss
 from obb_loss.config import (
     LossConfig,
@@ -56,7 +56,7 @@ from obb_loss.set_matching import SetHungarianMatcher, set_pairwise_costs
 __all__ = [
     "Assignment",
     "BoxFunction",
-    "BoxLossBuilder",
+    "BoxLossContext",
     "CompositeBoxLoss",
     "Err",
     "ErrorKind",
@@ -90,9 +90,8 @@ __all__ = [
     "WeightConfig",
     "WeightedLoss",
     "box_l1_loss",
+    "box_probiou_loss",
     "boxes_from_angles",
-    "build_loss",
-    "build_matcher",
     "checked_probiou_loss",
     "default_set_costs",
     "default_set_losses",

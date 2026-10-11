@@ -7,7 +7,7 @@ Run from the repository root. Each script runs on CPU and shows a complete backw
 | --- | --- | --- |
 | [matching.py](matching.py) | Dense predictions, list targets, an empty sample, matching, and ProbIoU | `uv run examples/matching.py` |
 | [classification.py](classification.py) | VFL and QFL with caller-supplied quality targets | `uv run examples/classification.py` |
-| [custom_loss.py](custom_loss.py) | A custom pure function combined with ProbIoU through the builder | `uv run examples/custom_loss.py` |
+| [custom_loss.py](custom_loss.py) | A custom pure function combined with ProbIoU through the composition | `uv run examples/custom_loss.py` |
 | [detr.py](detr.py) | Per-layer set criterion, separate matcher/loss weights, L1, ProbIoU, and VFL | `uv run examples/detr.py` |
 | [custom_set_loss.py](custom_set_loss.py) | Named weighted callbacks and a direction constraint on matched/unmatched queries | `uv run examples/custom_set_loss.py` |
 

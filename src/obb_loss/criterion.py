@@ -5,7 +5,7 @@ from torch import Tensor, nn
 from typing_extensions import override
 
 from obb_loss.config import ProbIoUConfig
-from obb_loss.losses.stable_probiou import stable_probiou_loss, validate_pairs
+from obb_loss.losses.stable_probiou import stable_probiou_loss, validate_pair_domain
 from obb_loss.packed import ErrorKind, InputError, PackedBoxes, make_packed_boxes
 from obb_loss.reduction import reduce_loss
 from obb_loss.result import Err, Ok, Result
@@ -26,7 +26,7 @@ def validate_alignment(
 
     Returns:
         Ok(the borrowed records) or Err(InputError) for invalid geometry, mismatched
-        sample offsets, devices, or pair-dependent ProbIoU domain.
+        sample offsets or devices.
     """
     for packed in (preds, targets):
         match make_packed_boxes(*packed):
@@ -42,11 +42,9 @@ def validate_alignment(
                 ErrorKind.ALIGNMENT, "cu_seqlens", "aligned sample counts must match"
             )
         )
-    match validate_pairs(preds.boxes, targets.boxes):
-        case Err() as failure:
-            return failure
-        case Ok():
-            return Ok((preds, targets))
+    if preds.boxes.device != targets.boxes.device:
+        return Err(InputError(ErrorKind.DEVICE, "pairs", "devices must match"))
+    return Ok((preds, targets))
 
 
 class ProbIoULoss(nn.Module):
@@ -104,4 +102,9 @@ class ProbIoULoss(nn.Module):
             case Err() as failure:
                 return failure
             case Ok():
-                return Ok(self.forward(preds, targets))
+                pass
+        match validate_pair_domain(preds.boxes, targets.boxes):
+            case Err() as failure:
+                return failure
+            case Ok():
+                return Ok(self(preds, targets))

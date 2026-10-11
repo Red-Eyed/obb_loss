@@ -5,6 +5,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import TYPE_CHECKING, Generic, NamedTuple, Protocol, TypeVar
 
+import torch
 from torch import Tensor, nn
 from typing_extensions import override
 
@@ -21,6 +22,16 @@ _DEFAULT_WEIGHT = WeightConfig()
 
 class CallbackContext(Protocol):
     """Provide the output layout and a differentiable zero for callback composition."""
+
+    @property
+    def output_count(self) -> int:
+        """Return the required sample or aligned-pair output count."""
+        ...
+
+    @property
+    def device(self) -> torch.device:
+        """Return the required output device without allocating tensors."""
+        ...
 
     def zero(self) -> Tensor[[int]]:
         """Return same-device float64 zeros connected to the prediction tensors."""
@@ -113,22 +124,6 @@ class WeightedLoss(nn.Module, Generic[C]):
                 )
 
 
-class _Term(nn.Module, Generic[C]):
-    """Register a named function or module without erasing its call signature."""
-
-    def __init__(self, name: str, function: LossFunction[C]) -> None:
-        """Retain the caller's callback and reporting name."""
-        super().__init__()
-        self.name = name
-        self.function = function
-
-    @override
-    # Native Torch stubs declare variadic forward; this term narrows it.
-    def forward(self, context: C) -> Result[Tensor[[int]], InputError]:  # pyrefly: ignore[bad-override]
-        """Invoke through Module.__call__ when the registered callback is a module."""
-        return self.function(context)
-
-
 class LossComposition(nn.Module, Generic[C]):
     """Own registered callbacks and validate their observable vector contracts."""
 
@@ -140,13 +135,13 @@ class LossComposition(nn.Module, Generic[C]):
                 construction do not change the selection. Module state is registered.
         """
         super().__init__()
-        terms: list[_Term[C]] = []
+        terms: list[tuple[str, LossFunction[C]]] = []
         for name, function in functions.items():
             if isinstance(function, WeightedLoss) and function.config.weight == 0:
                 continue
-            term = _Term(name, function)
-            self.add_module(f"term_{len(terms)}", term)
-            terms.append(term)
+            if isinstance(function, nn.Module):
+                self.add_module(f"term_{len(terms)}", function)
+            terms.append((name, function))
         self.terms = tuple(terms)
 
     @override
@@ -161,25 +156,22 @@ class LossComposition(nn.Module, Generic[C]):
             Ok(named float64 vectors) or a typed output/callback error prefixed with
             the caller's term name. No normalization or reduction is applied.
         """
-        zero = context.zero()
         values: list[NamedLoss] = []
-        for term in self.terms:
-            match term(context):
+        for name, function in self.terms:
+            match function(context):
                 case Err(error=error):
                     return Err(
-                        InputError(
-                            error.kind, f"{term.name}.{error.field}", error.detail
-                        )
+                        InputError(error.kind, f"{name}.{error.field}", error.detail)
                     )
                 case Ok(value=output):
                     pass
                 case _:
                     return Err(
-                        InputError(ErrorKind.CALLBACK, term.name, "expected Ok or Err")
+                        InputError(ErrorKind.CALLBACK, name, "expected Ok or Err")
                     )
-            match validate_output(output, zero.shape[0], zero.device):
+            match validate_output(output, context.output_count, context.device):
                 case Err(error=error):
-                    return Err(InputError(error.kind, term.name, error.detail))
+                    return Err(InputError(error.kind, name, error.detail))
                 case Ok(value=output):
-                    values.append(NamedLoss(term.name, output.double()))
+                    values.append(NamedLoss(name, output.double()))
         return Ok(tuple(values))
