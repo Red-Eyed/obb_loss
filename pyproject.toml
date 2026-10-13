@@ -4,12 +4,15 @@ build-backend = "hatchling.build"
 
 [project]
 name = "obb-loss"
-version = "0.12.1"
+version = "0.13.0"
 description = "Numerically stable oriented-box and quality-classification losses"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "Vadym Stupakov", email = "vadim.stupakov@gmail.com" }]
 dependencies = ["torch>=2.2", "einops>=0.7"]
+
+[project.optional-dependencies]
+matching = ["scipy>=1.13"]
 
 [dependency-groups]
 dev = [

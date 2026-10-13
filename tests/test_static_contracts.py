@@ -141,3 +141,37 @@ def test_native_shapes_and_module_callbacks(tmp_path: Path) -> None:
     assert "expected Int[6], got Int[5]" in diagnostics
     assert "expected Int[3], got Int[4]" in diagnostics
     assert "Custom.forward" in diagnostics
+
+
+def test_declarative_loss_preserves_projection_types(tmp_path: Path) -> None:
+    """A heterogenous declaration keeps each projection paired with its function."""
+    source = tmp_path / "declarative_contract.py"
+    valid = (
+        "from torch import Tensor\n"
+        "from obb_loss import Criterion, Matcher, Cost, Loss, Ok, Result, InputError, Predictions\n"
+        "from obb_loss import box_l1_loss, quality_focal_loss, hungarian_assignment\n"
+        "from obb_loss.losses.set_terms import (matched_box_inputs, "
+        "one_hot_classification_inputs, pairwise_box_l1_cost, target_count)\n"
+        "criterion = Criterion(\n"
+        "    Matcher(hungarian_assignment, (Cost('l1', pairwise_box_l1_cost, 1.),)),\n"
+        "    (Loss('box', box_l1_loss, matched_box_inputs, 5., target_count),\n"
+        "     Loss('class', quality_focal_loss, one_hot_classification_inputs, 1., target_count)),\n"
+        ")\n"
+    )
+    source.write_text(valid, encoding="utf-8")
+    command = [sys.executable, "-m", "tests.typecheck", str(source)]
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stdout + result.stderr
+    source.write_text(
+        valid
+        + "def wrong(first: int, second: str) -> Result[Tensor, InputError]:\n"
+        + "    return Ok(Tensor())\n"
+        + "invalid = Loss('bad', wrong, matched_box_inputs, 1., target_count)\n"
+        + "def wrong_geometry(boxes: Tensor[[2, 3, 5]], logits: Tensor[[2, 3, 4]]) -> Predictions:\n"
+        + "    return Predictions(boxes, logits)\n",
+        encoding="utf-8",
+    )
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert result.returncode != 0
+    assert "bad-argument-type" in result.stdout + result.stderr
+    assert "expected Int[6], got Int[5]" in result.stdout + result.stderr

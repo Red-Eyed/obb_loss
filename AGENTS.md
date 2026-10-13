@@ -1,13 +1,18 @@
 # obb_loss
 
 This repository contains pure PyTorch losses in `src/obb_loss/losses/` and
-focused tests in `tests/`. Keep it small: no detector harness, matcher, packed
-records, configuration framework, builders, or callback machinery.
+focused tests in `tests/`. The declarative criterion owns matching: keep tensor
+computation in `criterion_core.py` and assignment effects in `criterion.py` and
+`matching.py`. Extend it with immutable cost/loss declarations and ordinary
+functions. Keep it small: no detector harness, packed records, configuration
+framework, builders, registry, or callback machinery.
 
 Public losses return the small `Ok`/`Err` union defined in `result.py`. Each loss
 module owns a metadata validation helper for its shape, floating dtype and
 shared CPU/CUDA device contract. Do not scan tensor values or add checked APIs.
-Numerical domain requirements belong in function docstrings.
+Numerical domain requirements belong in function docstrings. Criterion validation
+also checks integer label/assignment metadata; scalar declarations have typed
+criterion errors. Optional SciPy stays behind the lazy assignment adapter.
 
 Geometry is `(cx, cy, width, height, cos(theta), sin(theta))`. Inputs are borrowed
 and never mutated. Computation disables autocast locally and uses float64.

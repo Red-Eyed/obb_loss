@@ -19,7 +19,7 @@ jobs:
           version: "0.12.1"
           python-version: ${{ matrix.python }}
           enable-cache: true
-      - run: uv sync --locked
+      - run: uv sync --locked --extra matching
       - run: uv run ruff format --check src tests
       - run: uv run ruff check src tests
       - run: uv run python -m tests.typecheck

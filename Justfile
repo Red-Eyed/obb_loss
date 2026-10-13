@@ -13,7 +13,7 @@ types:
     uv run python -m tests.typecheck
 
 test:
-    uv run pytest
+    uv run --extra matching pytest
 
 stress:
     uv run pytest -m stress
