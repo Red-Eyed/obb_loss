@@ -125,6 +125,80 @@ the term from outputs. All-disabled losses also skip matching and return a zero
 connected to predictions. Numerical domains, including finite positive custom
 divisors, remain the declared functions' responsibility.
 
+## Integrating a DETR decoder
+
+[examples/detr_training.py](examples/detr_training.py) is a runnable integration
+example with shared prediction heads, oriented box decoding, per-image targets,
+an optimizer step, and three supervision policies:
+
+```sh
+uv run --extra matching examples/detr_training.py
+```
+
+It uses synthetic decoder states shaped `[layers, batch, queries, hidden]` and
+prints gradients for each layer. Substitute your decoder's actual states at the
+marked line. The example leaves your backbone and Transformer implementation
+with your model; only the prediction-head and training-loss boundary changes.
+
+The [original DETR model](https://github.com/facebookresearch/detr/blob/main/models/detr.py)
+projects each decoder layer to class logits and boxes. For this library's built-in
+sigmoid classification, adapt those heads as follows:
+
+- Make the class head output `classes` foreground logits. Original DETR's extra
+  no-object column and softmax classification belong to a different objective;
+  replacing the head changes that classification objective. Do not simply pass
+  its `classes + 1` logits to the one-hot quality-focal declaration.
+- Make the oriented box head output five raw values: center/side parameters and
+  an angle. `decode_boxes` applies sigmoid to the first four values and converts
+  the angle to `(cos(theta), sin(theta))`. Keep projection and decoding in FP32,
+  even when the backbone/decoder uses autocast.
+- Return one `Predictions` record per decoder layer. The example's `predict_layers`
+  shows that last step of model forward. Feed the final record to
+  `criterion_loss` in your training loop and backpropagate `output.total`.
+- Convert annotations into `Targets`, one record per image. Use contiguous int64
+  foreground labels; retain an empty record for images without objects. Keep all
+  tensors on the model's device. Input target boxes are `(cx, cy, width, height)`
+  in pixels; angles are radians in the same coordinate convention as predictions.
+
+For rotated boxes, use a common spatial scale: the example divides all four
+spatial coordinates by `max(image_height, image_width)`. For a 640 by 480 image,
+`(160, 120, 80, 40)` becomes `(0.25, 0.1875, 0.125, 0.0625)`; angle coordinates
+are unchanged. Independently normalizing x and y changes the rotated geometry.
+If your original DETR annotations are already normalized separately by width and
+height, first recover pixels with `(width, height, width, height)`, then divide
+by the common scale. Apply the convention consistently after augmentation.
+
+For an axis-aligned detector, append a fixed direction `(1, 0)` to its four decoded
+coordinates and targets, rather than adding an angle head. Convert existing
+normalized coordinates to common units as above. ProbIoU replaces the geometric
+similarity term; it does not reproduce original DETR's GIoU objective. Keeping
+original softmax/background classification instead requires a declared custom
+classification cost, target projection, and numerical loss.
+
+The example's three modes make auxiliary policy explicit:
+
+| Mode | Matching | Gradient path |
+| --- | --- | --- |
+| `final_only` | Final layer only | Final predictions and their decoder dependencies |
+| `auxiliary_rematch` | Independently for each enabled layer | Each supervised layer |
+| `auxiliary_shared` | Once on final predictions, then reuse indices | Each supervised layer |
+
+The final layer has weight 1; the two auxiliary layers each have weight 0.5.
+These are example choices, not package defaults. `auxiliary_loss` skips zero-weight
+layers. Its shared-match branch calls the pure `prepare_context` and
+`evaluate_losses` functions on each layer's own tensors, retaining gradients.
+The original DETR criterion rematches auxiliary layers; shared matching is an
+explicit alternative. Named final-layer terms are already weighted in
+`output.total`; multiply by the layer weight once without applying term weights
+again. Match indices are nondifferentiable, while box and classification losses
+remain connected to the model.
+
+In your real training loop, keep your optimizer, gradient scaler, distributed
+normalization and error handling at the training boundary. The example's
+`require_loss` aborts on a typed criterion error; choose your own handling policy
+there. Auxiliary assignments reused from the final layer require the same query
+ordering and target batch across those layers.
+
 ## Extending the objective
 
 Add ordinary functions through declarations. For example, this term penalizes
