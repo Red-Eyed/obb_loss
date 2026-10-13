@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from dataclasses import replace
 from functools import partial
+from math import exp, log1p
 from typing import TYPE_CHECKING
 
 import pytest
 import torch
 import torch.nn.functional as F
 import torch.testing
+from einops import rearrange
 
 from obb_loss import (
     Cost,
@@ -129,6 +131,92 @@ def test_composition_oracle_and_gradients(context: LossContext) -> None:
     for target in context.targets:
         assert target.boxes.grad is not None
         assert torch.count_nonzero(target.boxes.grad[:, 0]) == target.boxes.shape[0]
+
+
+def quality_focal_oracle(logit: float, quality: float) -> tuple[float, float]:
+    """Evaluate beta=2 focal BCE and its logit derivative using scalar equations."""
+    probability = 1 / (1 + exp(-logit))
+    bce = log1p(exp(logit)) - quality * logit
+    residual = probability - quality
+    value = residual**2 * bce
+    derivative = residual**3 + 2 * residual * probability * (1 - probability) * bce
+    return value, derivative
+
+
+def test_nonzero_classification_targets_values_and_gradients(
+    context: LossContext,
+) -> None:
+    """Crossed matches select exact class targets, losses and analytic gradients."""
+    logits = torch.tensor(
+        [[[1.2, -0.7], [-1.1, 2.3]], [[0.4, -1.8], [1.7, 0.2]]],
+        dtype=torch.float64,
+        device=context.predictions.logits.device,
+        requires_grad=True,
+    )
+    context = replace(context, predictions=replace(context.predictions, logits=logits))
+    # Image 0 query 0 is unmatched; the other three queries have explicit classes.
+    quality = [0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0]
+    projection = one_hot_classification_inputs(context)
+    assert isinstance(projection, Ok)
+    expected_quality = logits.new_tensor(
+        [[0.0, 0.0], [0.0, 1.0], [0.0, 1.0], [1.0, 0.0]]
+    )
+    torch.testing.assert_close(projection.value[1], expected_quality)
+
+    entries = [
+        quality_focal_oracle(logit, target)
+        for logit, target in zip(
+            [1.2, -0.7, -1.1, 2.3, 0.4, -1.8, 1.7, 0.2],
+            quality,
+            strict=True,
+        )
+    ]
+    loss = Loss(
+        "classes", quality_focal_loss, one_hot_classification_inputs, 2.0, target_count
+    )
+    result = evaluate_losses((loss,), context)
+    assert isinstance(result, Ok)
+    numerator = sum(value for value, _ in entries)
+    torch.testing.assert_close(
+        result.value.raw["classes"], logits.new_tensor(numerator / 3)
+    )
+    torch.testing.assert_close(
+        result.value.weighted["classes"], logits.new_tensor(2 * numerator / 3)
+    )
+    torch.testing.assert_close(result.value.total, logits.new_tensor(2 * numerator / 3))
+    result.value.total.backward()
+    expected_gradient = rearrange(
+        logits.new_tensor([2 * gradient / 3 for _, gradient in entries]),
+        "(b q c) -> b q c",
+        b=2,
+        q=2,
+        c=2,
+    )
+    assert logits.grad is not None
+    torch.testing.assert_close(logits.grad, expected_gradient)
+    assert torch.all(logits.grad[0, 0] > 0)
+    assert logits.grad[0, 1, 1] < 0
+    assert logits.grad[1, 0, 1] < 0
+    assert logits.grad[1, 1, 0] < 0
+
+
+def test_nonzero_classification_cost_selects_target_labels(
+    context: LossContext,
+) -> None:
+    """Each target column uses its label's sigmoid probability, independent of boxes."""
+    logits = context.predictions.logits.new_tensor([[0.4, -1.8], [1.7, 0.2]])
+    predictions = ImagePredictions(context.predictions.boxes[1], logits)
+    outcome = build_cost_matrix(
+        (Cost("classes", class_probability_cost, 3.0),), predictions, context.targets[1]
+    )
+    assert isinstance(outcome, Ok)
+    expected = outcome.value.new_tensor(
+        [
+            [-3 / (1 + exp(-0.4)), -3 / (1 + exp(1.8))],
+            [-3 / (1 + exp(-1.7)), -3 / (1 + exp(-0.2))],
+        ]
+    )
+    torch.testing.assert_close(outcome.value, expected, atol=1e-7, rtol=1e-7)
 
 
 def test_costs_against_independent_oracles(context: LossContext) -> None:
