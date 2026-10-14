@@ -125,6 +125,33 @@ the term from outputs. All-disabled losses also skip matching and return a zero
 connected to predictions. Numerical domains, including finite positive custom
 divisors, remain the declared functions' responsibility.
 
+To return one contribution per image, set `Criterion(..., reduction="none")`
+and declare which image owns each first-axis loss row:
+
+```python
+from obb_loss.losses.set_terms import matched_sample_indices, query_sample_indices
+
+losses = (
+    obb.Loss("l1", obb.box_l1_loss, matched_box_inputs, 5.0, target_count,
+             sample_indices=matched_sample_indices),
+    obb.Loss("class", obb.quality_focal_loss, one_hot_classification_inputs,
+             1.0, target_count, sample_indices=query_sample_indices),
+)
+criterion = obb.Criterion(matcher=criterion.matcher, losses=losses, reduction="none")
+```
+
+`output.total` and every named term then have shape `[batch]`. Trailing value
+axes (for example, classes) are summed within each row. Custom `sample_indices`
+functions return `Ok(int64_indices)` shaped `[rows]` on the prediction device,
+or a typed `Err`; indices must be in `[0, batch)`. Only metadata is checked.
+Missing ownership returns a declaration error for active terms in `"none"` mode.
+
+The default `"sum"` preserves the scalar objective. `"mean"` divides that scalar
+by batch size. All modes retain the declared **batch** normalizer, so summing
+`"none"` contributions reproduces `"sum"`; images are not independently
+normalized. Scalar modes skip sample-index functions. Empty batches return an
+empty vector for `"none"` and a connected zero for scalar modes.
+
 ## Integrating a DETR decoder
 
 [examples/detr_training.py](examples/detr_training.py) is a runnable integration

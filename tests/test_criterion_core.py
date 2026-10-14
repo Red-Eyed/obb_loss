@@ -15,6 +15,7 @@ from einops import rearrange
 
 from obb_loss import (
     Cost,
+    CriterionFailure,
     Err,
     ImagePredictions,
     Loss,
@@ -23,6 +24,7 @@ from obb_loss import (
     Match,
     Ok,
     Predictions,
+    Reduction,
     Targets,
     box_l1_loss,
     quality_focal_loss,
@@ -37,10 +39,12 @@ from obb_loss.losses.set_terms import (
     class_probability_cost,
     identity,
     matched_box_inputs,
+    matched_sample_indices,
     one_hot_classification_inputs,
     pairwise_box_l1_cost,
     pairwise_probiou_cost,
     query_count,
+    query_sample_indices,
     supplied_quality_inputs,
     target_count,
 )
@@ -320,27 +324,40 @@ def test_bad_match_metadata(context: LossContext, failure: str) -> None:
 
 
 def matched_objective(
-    predictions: Predictions, targets: tuple[Targets, ...], matches: tuple[Match, ...]
-) -> Result[LossOutput, InputError]:
+    predictions: Predictions,
+    targets: tuple[Targets, ...],
+    matches: tuple[Match, ...],
+    reduction: Reduction = "sum",
+) -> Result[LossOutput, CriterionFailure]:
     """Prepare gathered tensors inside the compiled graph from borrowed leaves."""
     match prepare_context(predictions, targets, matches):
         case Err() as failure:
-            return failure
+            return Err(failure.error)
         case Ok(prepared):
-            loss = Loss("l1", box_l1_loss, matched_box_inputs, 2.0, target_count)
-            return evaluate_losses((loss,), prepared)
+            loss = Loss(
+                "l1",
+                box_l1_loss,
+                matched_box_inputs,
+                2.0,
+                target_count,
+                matched_sample_indices,
+            )
+            return evaluate_losses((loss,), prepared, reduction)
 
 
-def test_core_compiles_with_explicit_matches(context: LossContext) -> None:
+@pytest.mark.parametrize("reduction", ["none", "sum", "mean"])
+def test_core_compiles_with_explicit_matches(
+    context: LossContext, reduction: Reduction
+) -> None:
     """Tensor-only preparation/evaluation supports fullgraph AOT eager gradients."""
     compiled = torch.compile(matched_objective, backend="aot_eager", fullgraph=True)
-    arguments = (context.predictions, context.targets, context.matches)
+    arguments = (context.predictions, context.targets, context.matches, reduction)
     actual = compiled(*arguments)
     expected = matched_objective(*arguments)
     assert isinstance(actual, Ok)
     assert isinstance(expected, Ok)
     torch.testing.assert_close(actual.value.total, expected.value.total)
-    actual.value.total.backward()
+    actual.value.total.sum().backward()
     assert context.predictions.boxes.grad is not None
 
 
@@ -382,3 +399,93 @@ def test_normalization_and_empty_batch(context: LossContext) -> None:
     assert isinstance(
         prepare_context(mismatched, context.targets, context.matches), Err
     )
+
+
+@pytest.mark.parametrize("invalid", ["missing", "shape", "dtype", "device", "scalar"])
+def test_sample_ownership_contract(context: LossContext, invalid: str) -> None:
+    """Per-image grouping rejects unspecified ownership and invalid index metadata."""
+    term = Loss("l1", box_l1_loss, matched_box_inputs, 1.0, target_count)
+    if invalid != "missing":
+
+        def indices(ctx: LossContext) -> Result[Tensor, CriterionFailure]:
+            """Return deliberately invalid metadata without inspecting tensor values."""
+            reference = ctx.predictions.boxes
+            match invalid:
+                case "shape":
+                    return Ok(reference.new_zeros(2, dtype=torch.int64))
+                case "dtype":
+                    return Ok(reference.new_zeros(3))
+                case "device":
+                    return Ok(torch.zeros(3, dtype=torch.int64, device="meta"))
+                case _:
+                    return matched_sample_indices(ctx)
+
+        term = replace(term, sample_indices=indices)
+    if invalid == "scalar":
+
+        def scalar(first: Tensor, second: Tensor) -> Result[Tensor, InputError]:
+            """Demonstrate values that lost row ownership by premature summation."""
+            return Ok((first - second).sum())
+
+        term = replace(term, compute=scalar)
+    result = evaluate_losses((term,), context, "none")
+    assert isinstance(result, Err)
+    if invalid == "missing":
+        assert result.error.field == "sample_indices"
+    else:
+        assert isinstance(result.error, InputError)
+        assert result.error.kind.value == (
+            invalid if invalid in ("dtype", "device") else "shape"
+        )
+
+
+def test_unreduced_sum_preserves_values_and_all_gradients(context: LossContext) -> None:
+    """Grouping preserves supplied-quality, target and prediction gradient paths."""
+    quality = torch.full_like(context.predictions.logits, 0.3).requires_grad_()
+    terms = (
+        Loss(
+            "l1",
+            box_l1_loss,
+            matched_box_inputs,
+            5.0,
+            target_count,
+            matched_sample_indices,
+        ),
+        Loss(
+            "quality",
+            quality_focal_loss,
+            partial(supplied_quality_inputs, quality=quality),
+            2.0,
+            query_count,
+            query_sample_indices,
+        ),
+    )
+    scalar = evaluate_losses(terms, context)
+    images = evaluate_losses(terms, context, "none")
+    assert isinstance(scalar, Ok)
+    assert isinstance(images, Ok)
+    torch.testing.assert_close(images.value.total.sum(), scalar.value.total)
+    leaves = (
+        context.predictions.boxes,
+        context.predictions.logits,
+        *(target.boxes for target in context.targets),
+        quality,
+    )
+    expected = torch.autograd.grad(scalar.value.total, leaves, retain_graph=True)
+    actual = torch.autograd.grad(images.value.total.sum(), leaves)
+    for observed, reference in zip(actual, expected, strict=True):
+        torch.testing.assert_close(observed, reference)
+
+
+def test_sample_functions_are_skipped_for_scalar_reductions(
+    context: LossContext,
+) -> None:
+    """Scalar objectives need no image ownership callbacks."""
+
+    def forbidden(ctx: LossContext) -> Result[Tensor, CriterionFailure]:
+        """Fail if unused sample ownership is evaluated."""
+        raise AssertionError("sample indices evaluated")
+
+    term = Loss("l1", box_l1_loss, matched_box_inputs, 1.0, target_count, forbidden)
+    assert isinstance(evaluate_losses((term,), context, "sum"), Ok)
+    assert isinstance(evaluate_losses((term,), context, "mean"), Ok)

@@ -20,7 +20,12 @@ from obb_loss.result import Err, Ok, Result
 if TYPE_CHECKING:
     from shape_extensions import IntVar
 
-    from obb_loss.criterion_types import ImagePredictions, LossContext, Targets
+    from obb_loss.criterion_types import (
+        CriterionFailure,
+        ImagePredictions,
+        LossContext,
+        Targets,
+    )
     from obb_loss.result import InputError
 
     N = IntVar("N")
@@ -122,3 +127,29 @@ def query_count(context: LossContext) -> Tensor:
 def identity(context: LossContext) -> Tensor:
     """Leave a summed or already-normalized loss unscaled."""
     return context.predictions.boxes.new_tensor(1, dtype=torch.float64)
+
+
+def matched_sample_indices(context: LossContext) -> Result[Tensor, CriterionFailure]:
+    """Identify image ownership of gathered matched pairs, including empty matches."""
+    device = context.predictions.boxes.device
+    owners = [
+        torch.full(
+            (match.predictions.shape[0],), image, dtype=torch.int64, device=device
+        )
+        for image, match in enumerate(context.matches)
+    ]
+    return Ok(
+        torch.cat(owners)
+        if owners
+        else torch.empty(0, dtype=torch.int64, device=device)
+    )
+
+
+def query_sample_indices(context: LossContext) -> Result[Tensor, CriterionFailure]:
+    """Identify image ownership of flattened [batch * queries, ...] loss rows."""
+    boxes = context.predictions.boxes
+    return Ok(
+        torch.arange(boxes.shape[0], device=boxes.device).repeat_interleave(
+            boxes.shape[1]
+        )
+    )

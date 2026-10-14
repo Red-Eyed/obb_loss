@@ -8,10 +8,10 @@ import torch
 
 from obb_loss.criterion_core import (
     build_cost_matrix,
-    connected_zero,
     empty_match,
     evaluate_losses,
     prepare_context,
+    reduced_zero,
     validate_declaration,
     validate_inputs,
 )
@@ -40,6 +40,7 @@ def criterion_loss(
     preserve original prediction and target gradients. The selected solver may
     synchronize CUDA and transfer costs to CPU. Empty assignment problems bypass
     it. All-disabled losses skip matching and return a connected float64 zero.
+    Reduction controls scalar or [batch] outputs while retaining batch divisors.
     No inputs are mutated. Expected metadata, declaration and backend failures
     return Err; unexpected bugs in user functions propagate.
     """
@@ -54,7 +55,9 @@ def criterion_loss(
                 pass
     if not any(loss.weight > 0 for loss in criterion.losses):
         matches = tuple(empty_match(predictions.boxes) for _ in targets)
-        return Ok(LossOutput(connected_zero(predictions), {}, {}, matches))
+        return Ok(
+            LossOutput(reduced_zero(predictions, criterion.reduction), {}, {}, matches)
+        )
     assignments: list[Match] = []
     with torch.no_grad():
         for image, target in enumerate(targets):
@@ -78,7 +81,7 @@ def criterion_loss(
         case Err() as failure:
             return Err(failure.error)
         case Ok(context):
-            match evaluate_losses(criterion.losses, context):
+            match evaluate_losses(criterion.losses, context, criterion.reduction):
                 case Err(error):
                     return Err(error)
                 case Ok(output):

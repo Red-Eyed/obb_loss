@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
-from typing import Generic, Protocol, TypeAlias, TypeVarTuple, Unpack
+from typing import Generic, Literal, Protocol, TypeAlias, TypeVarTuple, Unpack
 
 from torch import Tensor
 
@@ -74,11 +74,24 @@ class CriterionError:
 
 
 CriterionFailure: TypeAlias = InputError | CriterionError
+Reduction: TypeAlias = Literal["none", "sum", "mean"]
+SampleIndices: TypeAlias = Callable[[LossContext], Result[Tensor, CriterionFailure]]
 Normalizer: TypeAlias = Callable[[LossContext], Tensor]
 CostFunction: TypeAlias = Callable[
     [ImagePredictions, Targets], Result[Tensor, InputError]
 ]
 AssignmentSolver: TypeAlias = Callable[[Tensor], Result[Match, CriterionFailure]]
+
+
+def missing_sample_indices(context: LossContext) -> Result[Tensor, CriterionFailure]:
+    """Report unspecified ownership only when per-image reduction needs it."""
+    return Err(
+        CriterionError(
+            CriterionErrorKind.SPECIFICATION,
+            "sample_indices",
+            "per-image reduction requires sample_indices for every active loss",
+        )
+    )
 
 
 @dataclass(frozen=True)
@@ -115,6 +128,10 @@ class LossTerm(Protocol):
         """Project typed arguments and compute unreduced values."""
         ...
 
+    def samples(self, context: LossContext) -> Result[Tensor, CriterionFailure]:
+        """Identify each first-axis loss row's image with in-range int64 indices."""
+        ...
+
     def divisor(self, context: LossContext) -> Tensor:
         """Return a finite positive scalar on the prediction device."""
         ...
@@ -126,7 +143,10 @@ class Loss(Generic[*Arguments]):
 
     Inputs and compute borrow tensors. Compute returns unreduced floating values
     or a metadata error. normalize returns a finite positive floating scalar on
-    the prediction device. Numerical domains are the functions' responsibility.
+    the prediction device. sample_indices returns int64 [rows] ownership for
+    the first axis of unreduced values; trailing axes are summed within each row.
+    Indices must be in range; only metadata is validated. Numerical domains
+    are the functions' responsibility.
     """
 
     name: str
@@ -134,6 +154,7 @@ class Loss(Generic[*Arguments]):
     inputs: Callable[[LossContext], Result[tuple[*Arguments], InputError]]
     weight: float
     normalize: Normalizer
+    sample_indices: SampleIndices = missing_sample_indices
 
     def values(self, context: LossContext) -> Result[Tensor, InputError]:
         """Propagate projection failures without calling the numerical function."""
@@ -143,6 +164,10 @@ class Loss(Generic[*Arguments]):
             case Ok(arguments):
                 return self.compute(*arguments)
 
+    def samples(self, context: LossContext) -> Result[Tensor, CriterionFailure]:
+        """Evaluate explicit row ownership without inferring it from tensor shapes."""
+        return self.sample_indices(context)
+
     def divisor(self, context: LossContext) -> Tensor:
         """Evaluate the declared normalization policy."""
         return self.normalize(context)
@@ -150,18 +175,25 @@ class Loss(Generic[*Arguments]):
 
 @dataclass(frozen=True)
 class Criterion:
-    """Declare the complete matching and loss objective without mutable state."""
+    """Declare matching and losses with sum, batch mean or per-image reduction.
+
+    Reduction defaults to the existing summed, batch-normalized scalar objective.
+    Per-image reduction requires explicit sample ownership for every active loss.
+    """
 
     matcher: Matcher
     losses: tuple[LossTerm, ...]
+    reduction: Reduction = "sum"
 
 
 @dataclass(frozen=True)
 class LossOutput:
-    """Return connected scalar losses and assignments; logging chooses detachment.
+    """Return connected scalar or per-image losses; logging chooses detachment.
 
     raw contains normalized unweighted losses; weighted contains their scaled
-    contributions. Disabled terms are omitted. Matches expose assignment policy.
+    contributions. Reduction "none" returns [batch]; "sum" and "mean" return
+    scalars with batch normalization retained. Disabled terms are omitted.
+    Matches expose assignment policy.
     """
 
     total: Tensor

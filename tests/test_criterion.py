@@ -22,6 +22,7 @@ from obb_loss import (
     Matcher,
     Ok,
     Predictions,
+    Reduction,
     Targets,
     box_l1_loss,
     criterion_loss,
@@ -32,8 +33,10 @@ from obb_loss.losses.set_terms import (
     class_probability_cost,
     identity,
     matched_box_inputs,
+    matched_sample_indices,
     one_hot_classification_inputs,
     pairwise_box_l1_cost,
+    query_sample_indices,
     target_count,
 )
 from obb_loss.result import ErrorKind, InputError, Result
@@ -94,13 +97,21 @@ def declaration(solver: AssignmentSolver = hungarian_assignment) -> Criterion:
             ),
         ),
         (
-            Loss("l1", box_l1_loss, matched_box_inputs, 5.0, target_count),
+            Loss(
+                "l1",
+                box_l1_loss,
+                matched_box_inputs,
+                5.0,
+                target_count,
+                matched_sample_indices,
+            ),
             Loss(
                 "class",
                 quality_focal_loss,
                 one_hot_classification_inputs,
                 1.0,
                 target_count,
+                query_sample_indices,
             ),
         ),
     )
@@ -434,3 +445,108 @@ def test_bad_cost_and_loss_outputs(
     assert isinstance(result, Err)
     assert isinstance(result.error, InputError)
     assert result.error.kind is ErrorKind.DTYPE
+
+
+@pytest.mark.parametrize("reduction", ["none", "sum", "mean"])
+def test_image_reduction_oracle_and_gradients(
+    data: tuple[Predictions, tuple[Targets, ...]], reduction: Reduction
+) -> None:
+    """Unequal match counts retain the batch divisor and isolate image gradients."""
+    result = criterion_loss(replace(declaration(), reduction=reduction), *data)
+    assert isinstance(result, Ok)
+    output = result.value
+    l1 = output.total.new_tensor([2 / 3, 1.0])
+    classes = output.total.new_full((2,), 0.5) * torch.log(output.total.new_tensor(2.0))
+    expected = 5 * l1 + classes
+    if reduction == "none":
+        torch.testing.assert_close(output.raw["l1"], l1)
+        torch.testing.assert_close(output.raw["class"], classes)
+        torch.testing.assert_close(output.weighted["l1"], 5 * l1)
+        torch.testing.assert_close(output.total, expected)
+        output.total[0].backward()
+        assert data[0].boxes.grad is not None
+        assert data[0].logits.grad is not None
+        assert torch.count_nonzero(data[0].boxes.grad[1]) == 0
+        assert torch.count_nonzero(data[0].logits.grad[1]) == 0
+    else:
+        expected_total = expected.sum() if reduction == "sum" else expected.mean()
+        torch.testing.assert_close(output.total, expected_total)
+        output.total.backward()
+        assert data[0].boxes.grad is not None
+        expected_gradient = 5 / 3 if reduction == "sum" else 5 / 6
+        torch.testing.assert_close(
+            data[0].boxes.grad[1, 0, 0], data[0].boxes.new_tensor(-expected_gradient)
+        )
+
+
+@pytest.mark.parametrize("reduction", ["none", "sum", "mean"])
+@pytest.mark.parametrize("empty", ["image", "queries", "batch", "disabled"])
+def test_reductions_with_empty_and_disabled_inputs(
+    data: tuple[Predictions, tuple[Targets, ...]], reduction: Reduction, empty: str
+) -> None:
+    """Empty images retain negatives; empty batches and disabled losses stay connected."""
+    predictions, targets = data
+    specification = replace(declaration(), reduction=reduction)
+    match empty:
+        case "image":
+            targets = (Targets(targets[0].boxes[:0], targets[0].labels[:0]), targets[1])
+        case "queries":
+            predictions = Predictions(
+                predictions.boxes[:, :0], predictions.logits[:, :0]
+            )
+            specification = replace(
+                specification,
+                matcher=Matcher(forbidden_solver, specification.matcher.costs),
+            )
+        case "batch":
+            predictions = Predictions(predictions.boxes[:0], predictions.logits[:0])
+            targets = ()
+            specification = replace(
+                specification,
+                matcher=Matcher(forbidden_solver, specification.matcher.costs),
+            )
+        case "disabled":
+            specification = Criterion(
+                Matcher(forbidden_solver, ()),
+                (
+                    Loss(
+                        "off",
+                        forbidden_compute,
+                        forbidden_projection,
+                        0.0,
+                        forbidden_normalizer,
+                    ),
+                ),
+                reduction,
+            )
+    result = criterion_loss(specification, predictions, targets)
+    assert isinstance(result, Ok)
+    output = result.value
+    batch = predictions.boxes.shape[0]
+    assert output.total.shape == ((batch,) if reduction == "none" else ())
+    if empty == "image":
+        classification = torch.log(output.total.new_tensor(2.0)) * 1.5
+        expected = torch.stack((classification, 15 + classification))
+        if reduction == "none":
+            torch.testing.assert_close(output.total, expected)
+            assert output.raw["l1"][0].item() == 0
+        else:
+            torch.testing.assert_close(
+                output.total, expected.sum() if reduction == "sum" else expected.mean()
+            )
+    else:
+        assert torch.count_nonzero(output.total) == 0
+    output.total.sum().backward()
+    assert data[0].boxes.grad is not None
+    assert data[0].logits.grad is not None
+
+
+def test_invalid_reduction_prevents_assignment(
+    data: tuple[Predictions, tuple[Targets, ...]],
+) -> None:
+    """Unsupported reduction declarations return a typed error before assignment."""
+    specification = replace(declaration(forbidden_solver), reduction="invalid")  # pyrefly: ignore[bad-argument-type]
+    result = criterion_loss(specification, *data)
+    assert isinstance(result, Err)
+    assert isinstance(result.error, CriterionError)
+    assert result.error.field == "reduction"

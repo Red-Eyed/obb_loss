@@ -16,6 +16,7 @@ from obb_loss.criterion_types import (
     Match,
     Matcher,
     Predictions,
+    Reduction,
     Targets,
 )
 from obb_loss.losses.l1 import box_l1_loss
@@ -42,6 +43,7 @@ __all__ = [
     "Matcher",
     "Ok",
     "Predictions",
+    "Reduction",
     "Result",
     "Targets",
     "box_l1_loss",

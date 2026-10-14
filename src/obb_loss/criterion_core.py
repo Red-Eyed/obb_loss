@@ -22,6 +22,7 @@ from obb_loss.criterion_types import (
     LossTerm,
     Match,
     Predictions,
+    Reduction,
     Targets,
 )
 from obb_loss.result import Err, ErrorKind, InputError, Ok, Result
@@ -32,6 +33,11 @@ if TYPE_CHECKING:
 
 def validate_declaration(criterion: Criterion) -> Result[None, CriterionFailure]:
     """Reject duplicate names, invalid weights and absent active matching costs."""
+    match validate_reduction(criterion.reduction):
+        case Err() as failure:
+            return failure
+        case Ok():
+            pass
     for group in (criterion.matcher.costs, criterion.losses):
         names: set[str] = set()
         for term in group:
@@ -63,6 +69,60 @@ def validate_declaration(criterion: Criterion) -> Result[None, CriterionFailure]
             )
         )
     return Ok(None)
+
+
+def validate_reduction(reduction: Reduction) -> Result[None, CriterionFailure]:
+    """Reject unsupported reduction declarations before tensor work."""
+    if reduction not in ("none", "sum", "mean"):
+        return Err(
+            CriterionError(
+                CriterionErrorKind.SPECIFICATION,
+                "reduction",
+                "expected none, sum or mean",
+            )
+        )
+    return Ok(None)
+
+
+def reduced_zero(predictions: Predictions, reduction: Reduction) -> Tensor:
+    """Retain zero gradients and return an empty vector for an empty image batch."""
+    if reduction == "none":
+        return predictions.boxes[..., :0].double().sum(dim=(1, 2)) + predictions.logits[
+            ..., :0
+        ].double().sum(dim=(1, 2))
+    return connected_zero(predictions)
+
+
+def reduce_values(
+    loss: LossTerm, values: Tensor, context: LossContext, reduction: Reduction
+) -> Result[Tensor, CriterionFailure]:
+    """Group loss rows by explicit image ownership, without scanning index values."""
+    batch = context.predictions.boxes.shape[0]
+    if reduction != "none":
+        total = values.double().sum()
+        return Ok(total / max(batch, 1) if reduction == "mean" else total)
+    match loss.samples(context):
+        case Err() as failure:
+            return failure
+        case Ok(indices):
+            pass
+    field = f"{loss.name}.sample_indices"
+    if values.ndim == 0 or indices.ndim != 1 or indices.shape[0] != values.shape[0]:
+        return Err(
+            InputError(
+                ErrorKind.SHAPE, field, "int64 [rows] required for non-scalar values"
+            )
+        )
+    if indices.dtype != torch.int64:
+        return Err(InputError(ErrorKind.DTYPE, field, "int64 required"))
+    if indices.device != context.predictions.boxes.device:
+        return Err(InputError(ErrorKind.DEVICE, field, "prediction device required"))
+    rows = (
+        values.double().sum(dim=tuple(range(1, values.ndim)))
+        if values.ndim > 1
+        else values.double()
+    )
+    return Ok(values.new_zeros(batch, dtype=torch.float64).index_add(0, indices, rows))
 
 
 def validate_inputs(
@@ -220,16 +280,24 @@ def prepare_context(
 
 
 def evaluate_losses(
-    losses: Sequence[LossTerm], context: LossContext
-) -> Result[LossOutput, InputError]:
+    losses: Sequence[LossTerm], context: LossContext, reduction: Reduction = "sum"
+) -> Result[LossOutput, CriterionFailure]:
     """Reduce declared losses without assignment, mutation or implicit detachment.
 
     Custom divisors must be finite positive scalars. Only divisor metadata is
     checked, allowing supplied device scalars without CPU synchronization.
+    "none" groups first-axis rows by declared sample indices and sums trailing
+    axes. "mean" divides the batch sum by max(batch size, 1). Every reduction
+    retains the declared batch divisor; an empty batch returns connected zeros.
     """
+    match validate_reduction(reduction):
+        case Err() as failure:
+            return Err(failure.error)
+        case Ok():
+            pass
     raw: dict[str, Tensor] = {}
     weighted: dict[str, Tensor] = {}
-    total = connected_zero(context.predictions)
+    total = reduced_zero(context.predictions, reduction)
     reference = context.predictions.boxes
     with torch.autocast(reference.device.type, enabled=False):
         for loss in losses:
@@ -237,21 +305,26 @@ def evaluate_losses(
                 continue
             match loss.values(context):
                 case Err() as failure:
-                    return failure
+                    return Err(failure.error)
                 case Ok(values):
                     pass
             match validate_tensor(values, reference, loss.name):
                 case Err() as failure:
-                    return failure
+                    return Err(failure.error)
                 case Ok():
                     pass
             divisor = loss.divisor(context)
             match validate_tensor(divisor, reference, f"{loss.name}.divisor", ()):
                 case Err() as failure:
-                    return failure
+                    return Err(failure.error)
                 case Ok():
                     pass
-            raw[loss.name] = values.double().sum() / divisor.double()
+            match reduce_values(loss, values, context, reduction):
+                case Err() as failure:
+                    return Err(failure.error)
+                case Ok(numerator):
+                    pass
+            raw[loss.name] = numerator / divisor.double()
             weighted[loss.name] = loss.weight * raw[loss.name]
             total = total + weighted[loss.name]
     return Ok(LossOutput(total, raw, weighted, context.matches))
